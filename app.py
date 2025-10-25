@@ -747,6 +747,7 @@ def video_iframe(video_id):
 
 @app.route('/API/yt/channel', methods=['GET'])
 def channel_metadata():
+    print("チャンネルデータAPIの表示…")
     # ... (URL生成とHTML取得、ytInitialData抽出までは省略 - V6と同じ) ...
     
     try:
@@ -805,7 +806,7 @@ def channel_metadata():
         }), 200
 
 
-        print("チャンネルデータAPIの表示…")
+        
 
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
