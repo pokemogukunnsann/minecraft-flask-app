@@ -527,29 +527,60 @@ def store():
     return render_template('store.html')
     
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+from flask import Flask, request, session, jsonify
+# ... 他のimport (hashlibなど) は省略
 
-        players = load_all_player_data()
+# ... (app = Flask(__name__), SECRET_KEYの設定、load_all_player_data関数などは省略)
+
+@app.route('/login', methods=['POST'])
+# GETリクエストはGitHub Pages側で処理するため、POSTのみ残します
+def login():
+    # GitHub Pagesからの fetch POST を想定
+    username = request.form.get('username')
+    password = request.form.get('password')
+
+    if not username or not password:
+        return jsonify({'success': False, 'message': 'ユーザー名とパスワードを入力してください。'}), 400
+
+    # ユーザーデータ読み込み (load_all_player_data() は実装済みと仮定)
+    players = load_all_player_data()
+    
+    authenticated_player = None
+    for player in players:
+        # データベースのハッシュ値と入力されたパスワードのハッシュ値を比較
+        # hashlib.sha256(password.encode()).hexdigest() は実装済みと仮定
+        if player['username'] == username and player['password_hash'] == hashlib.sha256(password.encode()).hexdigest():
+            authenticated_player = player
+            break
+
+    if authenticated_player:
+        # 認証成功
+        session.permanent = True 
+        session['username'] = authenticated_player['username']
+        session['player_uuid'] = authenticated_player['uuid']
+        session.pop('is_offline_player', None) 
         
-        for player in players:
-            if player['username'] == username and player['password_hash'] == hashlib.sha256(password.encode()).hexdigest():
-                session['username'] = username
-                session['player_uuid'] = player['uuid']
-                session.pop('is_offline_player', None) 
-                flash(f"ようこそ、{username}さん！", "success")
-                print(f"DEBUG: ユーザー '{username}' がログインしました。")
-                return redirect(url_for('menu'))
+        print(f"DEBUG: ユーザー '{username}' がログインしました。セッションCookieがセットされました。")
         
-        flash('ユーザー名またはパスワードが違います。', "error")
+        # 🌟 JSONを返す (Flaskのredirectは削除) 🌟
+        return jsonify({
+            'success': True,
+            'message': f"ようこそ、{username}さん！",
+            # 成功後、GitHub Pages側で遷移させるURLを渡す
+            'redirect_url': 'index.html' # GitHub Pagesのホーム画面へ
+        }), 200
+    else:
+        # 認証失敗
         print(f"DEBUG: ログイン失敗 - ユーザー名: {username}")
-        return render_template('login.html')
+        return jsonify({
+            'success': False, 
+            'message': 'ユーザー名またはパスワードが違います。'
+        }), 401 # 401 Unauthorized
+
+# ... 他のルート（/register, /API/...）
 
     print("ログインページを表示しました")
-    return render_template('login.html')
+   // return render_template('login.html')
     
 
 @app.route('/logout')
