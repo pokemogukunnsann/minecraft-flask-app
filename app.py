@@ -751,11 +751,32 @@ def video_iframe(video_id):
 
 @app.route('/API/yt/channel', methods=['GET'])
 def channel_metadata():
-    # ... (URL生成、HTML取得、JSON抽出のロジックはV7/V8と同じ) ...
-    print(f"DEBUG: Attempting to scrape URL: {url}")
+    """
+    チャンネルID（またはハンドル）に基づき、チャンネルメタデータを返すAPI。
+    YouTubeのHTMLを解析して情報を抽出する。
+    """
+    channel_id = request.args.get('c')
+    if not channel_id:
+        # Responseを使って日本語をそのまま返す
+        return Response(json.dumps({'error': 'Channel ID is missing'}, ensure_ascii=False), mimetype='application/json'), 400
+
+    # 1. URLの構築 (このブロックで 'url' 変数が定義されます)
+    if channel_id.startswith('@'):
+        url = f"https://www.youtube.com/{channel_id}"
+    elif channel_id.startswith('UC') and len(channel_id) >= 20:
+        url = f"https://www.youtube.com/channel/{channel_id}"
+    elif ' ' not in channel_id and '/' not in channel_id:
+        url = f"https://www.youtube.com/@{channel_id}"
+    else:
+        return Response(json.dumps({'error': '無効なチャンネルIDまたはハンドル形式です。'}, ensure_ascii=False), mimetype='application/json'), 400
+        
+    print("チャンネルデータAPIの表示…")
+    print(f"DEBUG: Attempting to scrape URL: {url}") # 👈 ここで 'url' が正しく参照される
+
     data = None 
 
     try:
+        # ... (tryブロックの残りのコードが続く) ...
         # 1. HTML取得とJSON抽出のコード (省略せずに全てtryブロック内に含む)
         response = requests.get(url, timeout=10)
         response.raise_for_status()
