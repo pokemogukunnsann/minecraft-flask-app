@@ -743,23 +743,55 @@ def video_iframe(video_id):
 
 
 
-# app.py の /API/yt/channel ルートを以下に置き換え
+
 
 @app.route('/API/yt/channel', methods=['GET'])
 def channel_metadata():
-    print("チャンネルデータAPIの表示…")
-    # ... (URL生成とHTML取得、ytInitialData抽出までは省略 - V6と同じ) ...
-    
+    """
+    チャンネルID（またはハンドル）に基づき、チャンネルメタデータを返すAPI。
+    YouTubeのHTMLを解析して情報を抽出する。
+    """
+    channel_id = request.args.get('c')
+    if not channel_id:
+        return jsonify({'error': 'Channel ID is missing'}), 400
+
+    # 1. URLの構築
+    if channel_id.startswith('@'):
+        url = f"https://www.youtube.com/{channel_id}"
+    elif channel_id.startswith('UC') and len(channel_id) >= 20:
+        url = f"https://www.youtube.com/channel/{channel_id}"
+    elif ' ' not in channel_id and '/' not in channel_id:
+        url = f"https://www.youtube.com/@{channel_id}"
+    else:
+        return jsonify({'error': '無効なチャンネルIDまたはハンドル形式です。'}), 400
+        
+    print("チャンネルデータAPIの表示…") # 👈 ユーザーログに合わせたデバッグ表示
+    print(f"DEBUG: Attempting to scrape URL: {url}")
+
+    data = None # 👈 念のため初期化
+
     try:
-        # ... (HTML取得とJSON抽出のコード) ...
+        # 2. YouTubeのHTMLを取得
+        response = requests.get(url, timeout=10)
+        response.raise_for_status() # 4xx/5xxエラーをここで検知
+        html_content = response.text
+
+        # 3. ytInitialData (JSON) を正規表現で抽出
+        match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
         
-        # 4. 必要な情報の抽出 (channelMetadataRendererを優先)
+        if not match:
+            return jsonify({'error': 'Initial channel data (ytInitialData) not found in HTML. Structure changed.'}), 500
+
+        # 4. JSONパース
+        data = json.loads(match.group(1)) # 👈 dataがここで定義されます
+
+        # 5. 必要な情報の抽出 (channelMetadataRendererを優先)
         
-        # 🌟 修正ポイント：metadata.channelMetadataRenderer を最優先でチェック 🌟
+        # 🌟 ここから情報抽出ロジックが始まります 🌟
         channel_info = data.get('metadata', {}).get('channelMetadataRenderer')
         
         if not channel_info:
-            # チャンネルヘッダーをフォールバックとして探索 (以前のロジック)
+            # チャンネルヘッダーをフォールバックとして探索
             header_data = data.get('header', {})
             for key in ['channelHeaderRenderer', 'c4TabbedHeaderRenderer', 'engagementPanelTitleHeaderRenderer']:
                 if key in header_data:
@@ -774,13 +806,14 @@ def channel_metadata():
                 'subscriber_count': '登録者数不明 (メタデータ構造不明)',
                 'profile_image_url': 'https://dummyimage.com/80x80/000/fff&text=CM',
                 'description': '', 
+                'join_date': ''
             }), 200
 
         # 情報抽出
         channel_name = channel_info.get('title') or 'チャンネル名不明'
         description = channel_info.get('description') or ''
         
-        # 登録者数は channelMetadataRenderer にはないので、headerから再度探す必要がある
+        # 登録者数は header から探す
         subscriber_text = "登録者数不明"
         if 'header' in data:
             for key in ['channelHeaderRenderer', 'c4TabbedHeaderRenderer']:
@@ -791,10 +824,11 @@ def channel_metadata():
                         subscriber_text = sub_obj.get('simpleText', '登録者数不明')
                         break
 
-        # プロフィール画像 (channelMetadataRendererから取得)
+        # プロフィール画像
         avatar_obj = channel_info.get('avatar')
         profile_img_url = avatar_obj.get('thumbnails', [{}])[-1].get('url', 'https://dummyimage.com/80x80/000/fff&text=CM') if avatar_obj and avatar_obj.get('thumbnails') else 'https://dummyimage.com/80x80/000/fff&text=CM'
         
+        # 最終結果をJSONで返す
         return jsonify({
             'channel_id': channel_id,
             'channel_name': channel_name,
@@ -804,12 +838,13 @@ def channel_metadata():
             'description': description,
             'join_date': ''
         }), 200
-        
+
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             return jsonify({'error': f'チャンネルが見つかりません。ID/ハンドル({channel_id})を確認してください。'}), 404
         return jsonify({'error': f'外部URLの取得に失敗しました: {e}'}), 503
     except Exception as e:
+        # JSON解析失敗やその他の予期せぬエラー
         print(f"ERROR: Unexpected error in channel API: {e}")
         return jsonify({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}), 500
 
