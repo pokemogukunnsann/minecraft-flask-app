@@ -561,8 +561,15 @@ def logout():
     print("DEBUG: ユーザーがログアウトしました。")
     return redirect(url_for('home'))
 
+# ... 省略 ...
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
+    # GETリクエスト（直接アクセス）の場合は、通常通りテンプレートを返す
+    if request.method == 'GET':
+        return render_template('register.html')
+    
+    # POSTリクエスト（GitHub PagesからのAJAXを想定）
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
@@ -570,9 +577,12 @@ def register():
         players = load_all_player_data()
         
         if any(p['username'] == username for p in players):
-            flash('このユーザー名はすでに使用されています。', "error")
-            print(f"DEBUG: 登録失敗 - ユーザー名 '{username}' は既に存在します。")
-            return render_template('register.html')
+            # 失敗: ユーザー名重複
+            # flash('このユーザー名はすでに使用されています。', "error") # AJAXではflashは使えない
+            return jsonify({
+                'success': False, 
+                'message': 'このユーザー名はすでに使用されています。'
+            }), 400 # 400 Bad Request
         
         new_uuid = str(uuid.uuid4())
         hashed_password = hashlib.sha256(password.encode()).hexdigest()
@@ -583,18 +593,25 @@ def register():
             'uuid': new_uuid
         }
         
-        print(f"DEBUG: 新規プレイヤーデータ: {new_player}")
-        success, response = save_single_player_data(new_player)
+        success, response_data = save_single_player_data(new_player)
+        
         if success:
-            flash('アカウントが正常に作成されました！ログインしてください。', "success")
-            print(f"DEBUG: ユーザー '{username}' のアカウントが正常に作成されました。")
-            return redirect(url_for('login'))
+            # 成功: JSONを返す
+            # flash('アカウントが正常に作成されました！ログインしてください。', "success") # AJAXではflashは使えない
+            return jsonify({
+                'success': True,
+                'message': 'アカウントが正常に作成されました！',
+                'redirect_url': 'https://minecraft-flask-app-gold.vercel.app/login' 
+            }), 201 # 201 Created
         else:
-            flash('アカウント作成に失敗しました。GitHubのトークン権限、リポジトリ名、オーナー名を確認してください。', "error")
-            print(f"DEBUG: ユーザー '{username}' のアカウント作成がGitHubへの保存失敗により失敗しました。")
-            return render_template('register.html')
-    print("アカウント生成ページを表示しました")
-    return render_template('register.html')
+            # 失敗: GitHub保存エラー
+            return jsonify({
+                'success': False,
+                'message': 'アカウント作成に失敗しました。GitHub設定を確認してください。',
+                'error_details': response_data
+            }), 500 # 500 Internal Server Error
+
+# ... 省略 ...
     
 
 
