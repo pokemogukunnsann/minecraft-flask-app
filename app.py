@@ -700,7 +700,7 @@ def playlist_data():
     videos = [create_dummy_video(i) for i in range(1, 6)] # 5本の動画
     
     return jsonify({
-        'title': f"マイクラ神ワザ集 【リストID:{playlist_id}}",
+        'title': f"マイクラ神ワザ集 【リストID:{playlist_id}}}",
         'channel_name': DUMMY_CHANNEL['name'],
         'description': 'マイクラで使える便利なテクニックをまとめた再生リストです。',
         'video_count': len(videos),
