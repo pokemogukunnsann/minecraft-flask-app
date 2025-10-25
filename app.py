@@ -6,6 +6,7 @@ import os
 import uuid
 import requests
 import base64
+from urllib.parse import urlparse, parse_qs, urlencode
 from dotenv import load_dotenv
 import random
 import string
