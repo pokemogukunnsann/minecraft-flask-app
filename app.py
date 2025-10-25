@@ -721,7 +721,10 @@ def video_iframe(video_id):
 
 
 
-# チャンネル情報取得API
+
+
+
+
 @app.route('/API/yt/channel', methods=['GET'])
 def channel_metadata():
     """
@@ -732,17 +735,29 @@ def channel_metadata():
     if not channel_id:
         return jsonify({'error': 'Channel ID is missing'}), 400
 
-    # @handle形式も /channel/UC... 形式もこのURLパターンで対応
-    url = f"https://www.youtube.com/@{channel_id}" if channel_id.startswith('@') else f"https://www.youtube.com/channel/{channel_id}"
+    # 1. リクエストされたID/ハンドルに基づいてURLを柔軟に構築する
+    if channel_id.startswith('@'):
+        # 例: c=@yoana0314 のように、@が付与されている場合
+        url = f"https://www.youtube.com/{channel_id}"
+    elif channel_id.startswith('UC') and len(channel_id) >= 20:
+        # 例: c=UCabcdefg12345 のように、古いチャンネルIDの場合
+        url = f"https://www.youtube.com/channel/{channel_id}"
+    elif ' ' not in channel_id and '/' not in channel_id:
+        # 例: c=yoana0314 のように、@が付いていないハンドルまたはカスタムURLの場合
+        # @を付けて試すのが、現在のYouTubeで最も一般的な形式です
+        url = f"https://www.youtube.com/@{channel_id}"
+    else:
+        return jsonify({'error': '無効なチャンネルIDまたはハンドル形式です。'}), 400
+        
+    print(f"DEBUG: Attempting to scrape URL: {url}")
     
     try:
-        # 1. チャンネルページのHTMLを取得
+        # 2. YouTubeのHTMLを取得 (requests.get(url, timeout=10) は curl -L に相当)
         response = requests.get(url, timeout=10)
-        response.raise_for_status()
+        response.raise_for_status() # 4xx/5xxエラーをここで検知（例: 404）
         html_content = response.text
 
-        # 2. ytInitialData (ページデータを格納する主要なJSON) を正規表現で抽出
-        # re.DOTALL: 改行文字もマッチさせる (JSONが複数行にわたるため必須)
+        # 3. ytInitialData (ページデータを格納する主要なJSON) を正規表現で抽出
         match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
         
         if not match:
@@ -750,41 +765,38 @@ def channel_metadata():
 
         data = json.loads(match.group(1))
 
-        # 3. 必要な情報の抽出 (JSONの構造は非常にデリケートです)
+        # 4. 必要な情報の抽出 (JSONの構造はデリケートです)
         
-        # チャンネルのヘッダー情報（名前、登録者数、画像URL）
         header = data.get('header', {}).get('c4TabbedHeaderRenderer', {})
         
-        # チャンネル名
         channel_name = header.get('title', 'チャンネル名不明')
-        # 登録者数
         subscriber_text = header.get('subscriberCountText', {}).get('simpleText', '登録者数不明')
-        # プロフィール画像 (通常はthumbnailsリストの最後の要素が最大サイズ)
         profile_img_url = header.get('avatar', {}).get('thumbnails', [{}])[-1].get('url', 'https://dummyimage.com/80x80/000/fff&text=CM')
         
-        # チャンネルID (古い形式のIDを取得、これは内部のbrowseIdとして格納されていることが多い)
-        # c4TabbedHeaderRenderer.channelId または .navigationEndpoint.browseEndpoint.browseId を探す必要があるが、
-        # ここではユーザーが指定したIDを一旦使用
-        
-        # 4. 結果をJSONで返す
+        # 5. 結果をJSONで返す
         return jsonify({
-            'channel_id': channel_id, # ユーザーが指定したID（@handleまたはUC...）
+            'channel_id': channel_id,
             'channel_name': channel_name,
             'subscriber_count': subscriber_text,
             'profile_image_url': profile_img_url,
-            # その他のデータは一旦空で定義
-            'banner_image_url': '',
+            'banner_image_url': '', # 構造が複雑なため、一旦空で定義
             'description': '', 
             'join_date': ''
         }), 200
 
+    except requests.exceptions.HTTPError as e:
+        # 404 Not Found など、YouTube側がそのURLでコンテンツを見つけられなかった場合
+        if e.response.status_code == 404:
+            return jsonify({'error': f'チャンネルが見つかりません。ID/ハンドル({channel_id})を確認してください。'}), 404
+        return jsonify({'error': f'外部URLの取得に失敗しました: {e}'}), 503
     except requests.exceptions.RequestException as e:
-        print(f"ERROR: Failed to fetch YouTube URL: {e}")
+        # タイムアウトやネットワークエラーなど
         return jsonify({'error': f'外部URLの取得に失敗しました: {e}'}), 503
     except json.JSONDecodeError as e:
-        print(f"ERROR: Failed to parse JSON data: {e}")
+        # JSON解析失敗
         return jsonify({'error': 'YouTubeデータ解析中にエラーが発生しました'}), 500
     except Exception as e:
+        # その他の予期せぬエラー
         print(f"ERROR: Unexpected error in channel API: {e}")
         return jsonify({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}), 500
         print("チャンネルデータAPIの表示…")
