@@ -745,91 +745,77 @@ def video_iframe(video_id):
 
 
 
+
+
+# ... (他の設定やインポートは省略されています) ...
+
 @app.route('/API/yt/channel', methods=['GET'])
 def channel_metadata():
-    """
-    チャンネルID（またはハンドル）に基づき、チャンネルメタデータを返すAPI。
-    YouTubeのHTMLを解析して情報を抽出する。
-    """
-    channel_id = request.args.get('c')
-    if not channel_id:
-        return jsonify({'error': 'Channel ID is missing'}), 400
-
-    # 1. URLの構築
-    if channel_id.startswith('@'):
-        url = f"https://www.youtube.com/{channel_id}"
-    elif channel_id.startswith('UC') and len(channel_id) >= 20:
-        url = f"https://www.youtube.com/channel/{channel_id}"
-    elif ' ' not in channel_id and '/' not in channel_id:
-        url = f"https://www.youtube.com/@{channel_id}"
-    else:
-        return jsonify({'error': '無効なチャンネルIDまたはハンドル形式です。'}), 400
-        
-    print("チャンネルデータAPIの表示…") # 👈 ユーザーログに合わせたデバッグ表示
+    # ... (URL生成、HTML取得、JSON抽出のロジックはV7/V8と同じ) ...
     print(f"DEBUG: Attempting to scrape URL: {url}")
-
-    data = None # 👈 念のため初期化
+    data = None 
 
     try:
-        # 2. YouTubeのHTMLを取得
+        # 1. HTML取得とJSON抽出のコード (省略せずに全てtryブロック内に含む)
         response = requests.get(url, timeout=10)
-        response.raise_for_status() # 4xx/5xxエラーをここで検知
+        response.raise_for_status()
         html_content = response.text
-
-        # 3. ytInitialData (JSON) を正規表現で抽出
         match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
-        
         if not match:
-            return jsonify({'error': 'Initial channel data (ytInitialData) not found in HTML. Structure changed.'}), 500
+            return jsonify({'error': 'Initial channel data (ytInitialData) not found.'}), 500
+        data = json.loads(match.group(1))
 
-        # 4. JSONパース
-        data = json.loads(match.group(1)) # 👈 dataがここで定義されます
-
-        # 5. 必要な情報の抽出 (channelMetadataRendererを優先)
+        # 2. 必要な情報の抽出 (最も可能性の高いレンダラーを優先)
         
-        # 🌟 ここから情報抽出ロジックが始まります 🌟
         channel_info = data.get('metadata', {}).get('channelMetadataRenderer')
         
         if not channel_info:
-            # チャンネルヘッダーをフォールバックとして探索
+            # チャンネルヘッダーをフォールバックとして探索 (pageHeaderRendererも含む)
             header_data = data.get('header', {})
-            for key in ['channelHeaderRenderer', 'c4TabbedHeaderRenderer', 'engagementPanelTitleHeaderRenderer']:
+            for key in ['channelHeaderRenderer', 'c4TabbedHeaderRenderer', 'engagementPanelTitleHeaderRenderer', 'pageHeaderRenderer']: # 👈 pageHeaderRendererを追加
                 if key in header_data:
                     channel_info = header_data.get(key)
                     print(f"DEBUG: Found channel info in fallback renderer: {key}")
                     break
 
         if not channel_info:
-            return jsonify({
-                'channel_id': channel_id,
-                'channel_name': 'チャンネル名不明 (メタデータ構造不明)',
-                'subscriber_count': '登録者数不明 (メタデータ構造不明)',
-                'profile_image_url': 'https://dummyimage.com/80x80/000/fff&text=CM',
-                'description': '', 
-                'join_date': ''
-            }), 200
+            return Response(json.dumps({'error': 'メタデータ構造が見つかりません。'}, ensure_ascii=False), mimetype='application/json'), 500
 
-        # 情報抽出
-        channel_name = channel_info.get('title') or 'チャンネル名不明'
+        # 情報抽出 (タイトルは simpleText 構造にも対応)
+        
+        channel_name_obj = channel_info.get('title') or channel_info.get('pageTitle')
+        if isinstance(channel_name_obj, dict) and 'simpleText' in channel_name_obj:
+             channel_name = channel_name_obj['simpleText']
+        else:
+             channel_name = channel_name_obj or 'チャンネル名不明'
+             
         description = channel_info.get('description') or ''
         
-        # 登録者数は header から探す
+        # 登録者数は header のみから探す
         subscriber_text = "登録者数不明"
         if 'header' in data:
-            for key in ['channelHeaderRenderer', 'c4TabbedHeaderRenderer']:
-                header = data['header'].get(key)
-                if header:
-                    sub_obj = header.get('subscriberCountText') or header.get('subscribersText')
-                    if sub_obj:
-                        subscriber_text = sub_obj.get('simpleText', '登録者数不明')
-                        break
+            header_data = data['header']
+            for key in header_data.keys():
+                if key.endswith('HeaderRenderer'):
+                    header = header_data.get(key)
+                    if header:
+                        sub_obj = header.get('subscriberCountText') or header.get('subscribersText')
+                        if sub_obj and isinstance(sub_obj, dict) and 'simpleText' in sub_obj:
+                            subscriber_text = sub_obj['simpleText']
+                            break
 
         # プロフィール画像
-        avatar_obj = channel_info.get('avatar')
-        profile_img_url = avatar_obj.get('thumbnails', [{}])[-1].get('url', 'https://dummyimage.com/80x80/000/fff&text=CM') if avatar_obj and avatar_obj.get('thumbnails') else 'https://dummyimage.com/80x80/000/fff&text=CM'
+        avatar_obj = channel_info.get('avatar') or channel_info.get('image') # pageHeaderRendererのimageに対応
+        if avatar_obj and avatar_obj.get('thumbnails'):
+             profile_img_url = avatar_obj.get('thumbnails', [{}])[-1].get('url', 'https://dummyimage.com/80x80/000/fff&text=CM')
+        elif avatar_obj and avatar_obj.get('decoratedAvatarViewModel', {}).get('avatar', {}).get('avatarViewModel', {}).get('image', {}).get('sources'): # pageHeaderRendererの複雑な構造に対応
+             sources = avatar_obj['decoratedAvatarViewModel']['avatar']['avatarViewModel']['image']['sources']
+             profile_img_url = sources[-1]['url']
+        else:
+             profile_img_url = 'https://dummyimage.com/80x80/000/fff&text=CM'
         
-        # 最終結果をJSONで返す
-        return jsonify({
+        # 最終結果をJSONで返す (ensure_ascii=Falseで日本語をエスケープしない)
+        final_data = {
             'channel_id': channel_id,
             'channel_name': channel_name,
             'subscriber_count': subscriber_text,
@@ -837,16 +823,17 @@ def channel_metadata():
             'banner_image_url': '', 
             'description': description,
             'join_date': ''
-        }), 200
+        }
+        json_response = json.dumps(final_data, ensure_ascii=False, indent=4)
+        return Response(json_response, mimetype='application/json'), 200
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            return jsonify({'error': f'チャンネルが見つかりません。ID/ハンドル({channel_id})を確認してください。'}), 404
-        return jsonify({'error': f'外部URLの取得に失敗しました: {e}'}), 503
+            return Response(json.dumps({'error': f'チャンネルが見つかりません。ID/ハンドル({channel_id})を確認してください。'}, ensure_ascii=False), mimetype='application/json'), 404
+        return Response(json.dumps({'error': f'外部URLの取得に失敗しました: {e}'}, ensure_ascii=False), mimetype='application/json'), 503
     except Exception as e:
-        # JSON解析失敗やその他の予期せぬエラー
         print(f"ERROR: Unexpected error in channel API: {e}")
-        return jsonify({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}), 500
+        return Response(json.dumps({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, ensure_ascii=False), mimetype='application/json'), 500
 
 
         
