@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ゲームメニュー - マイクラプロジェクト</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>ゲームメニュー</h1>
+        <nav>
+            <ul>
+                <li><a href="/home">ホーム</a></li>
+                <li><a href="/setting">設定</a></li>
+                <li><a href="/store">マーケットプレイス</a></li>
+                <li><a href="/menu">ゲームメニュー</a></li>
+                <li><a href="/import">パックをインポート</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        {# Flashメッセージ表示ブロック #}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="flashes">
+                {% for category, message in messages %}
+                    <li class="{{ category }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        <h2>ワールド一覧</h2>
+        {% if session.username %}
+            <p>ようこそ、{{ session.username }}さん！</p>
+            <p><a href="{{ url_for('new_world') }}">新しいワールドを作成</a></p>
+            <h3>あなたのワールド:</h3>
+            {% if worlds %}
+                <ul>
+                    {% for world in worlds %}
+                        <li>
+                            ワールド名: {{ world.world_name }} (UUID: {{ world.world_uuid }})
+                            <a href="{{ url_for('play_game', world_name=world.world_name, world_uuid=world.world_uuid) }}">プレイ</a> |
+                            <a href="#">設定 (未実装)</a>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p>まだワールドがありません。新しいワールドを作成してください。</p>
+            {% endif %}
+            <p><a href="{{ url_for('logout') }}">ログアウト</a></p>
+        {% else %}
+            <p>ゲームをプレイするにはログインしてください。</p>
+            <p><a href="{{ url_for('login') }}">ログイン</a> | <a href="{{ url_for('register') }}">新規登録</a></p>
+        {% endif %}
+    </main>
+    <footer>
+        <p>&copy; 2025 マイクラプロジェクト</p>
+    </footer>
+</body>
+</html>

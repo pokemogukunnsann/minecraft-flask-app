@@ -1,0 +1,8 @@
+pyglet 
+moderngl 
+PyOpenGL 
+panda3d 
+Flask
+requests 
+python-dotenv
+noise

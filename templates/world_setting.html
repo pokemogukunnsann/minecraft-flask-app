@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ワールド設定 - マイクラプロジェクト</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>ワールド設定</h1>
+        <nav>
+            <ul>
+                <li><a href="/home">ホーム</a></li>
+                <li><a href="/setting">設定</a></li>
+                <li><a href="/store">マーケットプレイス</a></li>
+                <li><a href="/menu">ゲームメニュー</a></li>
+                <li><a href="/import">パックをインポート</a></li>
+                <li><a href="/server">サーバー</a></li>
+                <li><a href="/offline">オフラインプレイ</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        {# Flashメッセージ表示ブロック #}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="flashes">
+                {% for category, message in messages %}
+                    <li class="{{ category }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        <h2>ワールド "{{ world.world_name }}" の設定</h2>
+        {% if world %}
+            <form method="POST">
+                <label for="game_mode">ゲームモード:</label><br>
+                <select id="game_mode" name="game_mode">
+                    <option value="survival" {% if world.game_mode == 'survival' %}selected{% endif %}>サバイバル</option>
+                    <option value="creative" {% if world.game_mode == 'creative' %}selected{% endif %}>クリエイティブ</option>
+                </select><br><br>
+                
+                <input type="checkbox" id="cheats_enabled" name="cheats_enabled" {% if world.cheats_enabled %}checked{% endif %}>
+                <label for="cheats_enabled">チートを許可</label><br><br>
+
+                <h3>パック設定</h3>
+                <label for="resource_packs">リソースパック (複数選択可):</label><br>
+                <select id="resource_packs" name="resource_packs" multiple size="5">
+                    {% for pack in available_packs %}
+                        {% if pack.endswith('.mcpack') %}
+                            <option value="{{ pack }}" {% if pack in world.resource_packs %}selected{% endif %}>{{ pack }}</option>
+                        {% endif %}
+                    {% endfor %}
+                </select><br><br>
+
+                <label for="behavior_packs">ビヘイビアパック (複数選択可):</label><br>
+                <select id="behavior_packs" name="behavior_packs" multiple size="5">
+                    {% for pack in available_packs %}
+                        {% if pack.endswith('.mcaddon') %}
+                            <option value="{{ pack }}" {% if pack in world.behavior_packs %}selected{% endif %}>{{ pack }}</option>
+                        {% endif %}
+                    {% endfor %}
+                </select><br><br>
+                
+                <input type="submit" value="設定を保存">
+            </form>
+            <p>現在のシード値: {{ world.seed }}</p>
+            <p>ワールドUUID: {{ world.world_uuid }}</p>
+        {% else %}
+            <p>ワールド設定を読み込めませんでした。</p>
+        {% endif %}
+        <p><a href="{{ url_for('menu') }}">ゲームメニューに戻る</a></p>
+    </main>
+    <footer>
+        <p>&copy; 2025 マイクラプロジェクト</p>
+    </footer>
+</body>
+</html>
