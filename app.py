@@ -750,7 +750,7 @@ def store():
 
 @app.route('/logins', methods=['POST'])
 # GETリクエストはGitHub Pages側で処理するため、POSTのみ残します
-def login():
+def logins():
     # GitHub Pagesからの fetch POST を想定
     username = request.form.get('username')
     password = request.form.get('password')
