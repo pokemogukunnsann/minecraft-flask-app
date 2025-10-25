@@ -804,6 +804,14 @@ def channel_metadata():
             'description': description,
             'join_date': ''
         }), 200
+        
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            return jsonify({'error': f'チャンネルが見つかりません。ID/ハンドル({channel_id})を確認してください。'}), 404
+        return jsonify({'error': f'外部URLの取得に失敗しました: {e}'}), 503
+    except Exception as e:
+        print(f"ERROR: Unexpected error in channel API: {e}")
+        return jsonify({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}), 500
 
 
         
