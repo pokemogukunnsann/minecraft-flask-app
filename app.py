@@ -766,13 +766,55 @@ def channel_metadata():
 
         data = json.loads(match.group(1))
 
+        
         # 4. 必要な情報の抽出 (JSONの構造はデリケートです)
         
-        header = data.get('header', {}).get('c4TabbedHeaderRenderer', {})
+        # チャンネルのヘッダー情報が存在する可能性のある2つの主要な場所をチェック
+        header = data.get('header', {})
         
-        channel_name = header.get('title', 'チャンネル名不明')
-        subscriber_text = header.get('subscriberCountText', {}).get('simpleText', '登録者数不明')
-        profile_img_url = header.get('avatar', {}).get('thumbnails', [{}])[-1].get('url', 'https://dummyimage.com/80x80/000/fff&text=CM')
+        # A) c4TabbedHeaderRenderer（古い、または一部のチャンネル）
+        channel_info = header.get('c4TabbedHeaderRenderer')
+        
+        if not channel_info:
+            # B) channelHeaderRenderer（新しい、または@ハンドル形式のチャンネル）
+            channel_info = header.get('channelHeaderRenderer')
+
+        if not channel_info:
+            # どちらの構造も見つからない場合は、エラーではなくフォールバックを返す
+            print("WARNING: c4TabbedHeaderRenderer/channelHeaderRenderer 構造が見つかりませんでした。")
+            return jsonify({
+                'channel_id': channel_id,
+                'channel_name': 'チャンネル名不明 (構造変更)',
+                'subscriber_count': '登録者数不明 (構造変更)',
+                'profile_image_url': 'https://dummyimage.com/80x80/000/fff&text=CM',
+                'banner_image_url': '',
+                'description': '', 
+                'join_date': ''
+            }), 200
+
+
+        # 情報抽出
+        channel_name = channel_info.get('title', channel_info.get('channelTitle', 'チャンネル名不明'))
+        
+        # 登録者数 (channelHeaderRendererではsubscriberCountText、c4ではsubscriberCountText)
+        subscriber_text_obj = channel_info.get('subscriberCountText') or channel_info.get('subscribersText')
+        subscriber_text = subscriber_text_obj.get('simpleText', '登録者数不明') if subscriber_text_obj else '登録者数不明'
+        
+        # プロフィール画像
+        avatar_obj = channel_info.get('avatar') or channel_info.get('authorAvatar')
+        profile_img_url = avatar_obj.get('thumbnails', [{}])[-1].get('url', 'https://dummyimage.com/80x80/000/fff&text=CM') if avatar_obj else 'https://dummyimage.com/80x80/000/fff&text=CM'
+        
+        # 5. 結果をJSONで返す
+        return jsonify({
+            'channel_id': channel_id,
+            'channel_name': channel_name,
+            'subscriber_count': subscriber_text,
+            'profile_image_url': profile_img_url,
+            'banner_image_url': '', 
+            'description': '', 
+            'join_date': ''
+        }), 200
+
         
         # 5. 結果をJSONで返す
         return jsonify({
