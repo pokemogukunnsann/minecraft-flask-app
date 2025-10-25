@@ -719,23 +719,75 @@ def video_iframe(video_id):
         print("動画埋め込みlink APIの表示…")
 
 
+
+
+# チャンネル情報取得API
 @app.route('/API/yt/channel', methods=['GET'])
 def channel_metadata():
-    """channel/index.html用のチャンネルメタデータを返すAPI"""
+    """
+    チャンネルID（またはハンドル）に基づき、チャンネルメタデータを返すAPI。
+    YouTubeのHTMLを解析して情報を抽出する。
+    """
     channel_id = request.args.get('c')
     if not channel_id:
         return jsonify({'error': 'Channel ID is missing'}), 400
+
+    # @handle形式も /channel/UC... 形式もこのURLパターンで対応
+    url = f"https://www.youtube.com/@{channel_id}" if channel_id.startswith('@') else f"https://www.youtube.com/channel/{channel_id}"
+    
+    try:
+        # 1. チャンネルページのHTMLを取得
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        html_content = response.text
+
+        # 2. ytInitialData (ページデータを格納する主要なJSON) を正規表現で抽出
+        # re.DOTALL: 改行文字もマッチさせる (JSONが複数行にわたるため必須)
+        match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
         
-    return jsonify({
-        'channel_id': DUMMY_CHANNEL['id'],
-        'channel_name': DUMMY_CHANNEL['name'],
-        'subscriber_count': DUMMY_CHANNEL['subs'],
-        'profile_image_url': DUMMY_CHANNEL['img'],
-        'banner_image_url': DUMMY_CHANNEL['banner'],
-        'description': DUMMY_CHANNEL['desc'],
-        'join_date': DUMMY_CHANNEL['join_date']
-    }), 200
-    print("チャンネルデータAPIの表示…")
+        if not match:
+            return jsonify({'error': 'Initial channel data (ytInitialData) not found in HTML. YouTube structure may have changed.'}), 500
+
+        data = json.loads(match.group(1))
+
+        # 3. 必要な情報の抽出 (JSONの構造は非常にデリケートです)
+        
+        # チャンネルのヘッダー情報（名前、登録者数、画像URL）
+        header = data.get('header', {}).get('c4TabbedHeaderRenderer', {})
+        
+        # チャンネル名
+        channel_name = header.get('title', 'チャンネル名不明')
+        # 登録者数
+        subscriber_text = header.get('subscriberCountText', {}).get('simpleText', '登録者数不明')
+        # プロフィール画像 (通常はthumbnailsリストの最後の要素が最大サイズ)
+        profile_img_url = header.get('avatar', {}).get('thumbnails', [{}])[-1].get('url', 'https://dummyimage.com/80x80/000/fff&text=CM')
+        
+        # チャンネルID (古い形式のIDを取得、これは内部のbrowseIdとして格納されていることが多い)
+        # c4TabbedHeaderRenderer.channelId または .navigationEndpoint.browseEndpoint.browseId を探す必要があるが、
+        # ここではユーザーが指定したIDを一旦使用
+        
+        # 4. 結果をJSONで返す
+        return jsonify({
+            'channel_id': channel_id, # ユーザーが指定したID（@handleまたはUC...）
+            'channel_name': channel_name,
+            'subscriber_count': subscriber_text,
+            'profile_image_url': profile_img_url,
+            # その他のデータは一旦空で定義
+            'banner_image_url': '',
+            'description': '', 
+            'join_date': ''
+        }), 200
+
+    except requests.exceptions.RequestException as e:
+        print(f"ERROR: Failed to fetch YouTube URL: {e}")
+        return jsonify({'error': f'外部URLの取得に失敗しました: {e}'}), 503
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Failed to parse JSON data: {e}")
+        return jsonify({'error': 'YouTubeデータ解析中にエラーが発生しました'}), 500
+    except Exception as e:
+        print(f"ERROR: Unexpected error in channel API: {e}")
+        return jsonify({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}), 500
+        print("チャンネルデータAPIの表示…")
 
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
