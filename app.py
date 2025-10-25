@@ -902,7 +902,7 @@ def channel_videos():
     except Exception as e:
         print(f"ERROR: Internal API video list scraping failed: {e}")
         return jsonify({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}), 500
-        print("チャンネル動画データAPIの表示…")
+    print("チャンネル動画データAPIの表示…")
         
 
 
