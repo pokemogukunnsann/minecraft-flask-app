@@ -16,6 +16,7 @@ import traceback
 import subprocess
 import threading
 import time
+from flask_cors import CORS
 
 app = Flask(__name__)
 
@@ -23,12 +24,31 @@ app = Flask(__name__)
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY') # SECRET_KEYを環境変数から読み込む
+#app.secret_key = os.getenv('SECRET_KEY')
+print("⬆️SECRET_KEYを環境変数から読み込み中⬇️")
+app.secret_key = os.environ.get('SECRET_KEY', 'your_default_secret_key_for_dev')
 
 # --- GitHub API 設定 ---
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_OWNER = os.getenv('GITHUB_OWNER')
 GITHUB_REPO = os.getenv('GITHUB_REPO')
+print("その他の変数を環境変数から読み込み中")
+
+# GitHub Pagesのドメインからのアクセスを許可
+# TODO: 実際のGitHub Pagesのドメインに置き換える必要があります
+CORS(app, supports_credentials=True, origins=[
+    f"https://{GITHUB_OWNER}.github.io", 
+    "http://127.0.0.1:5500" # ローカルテスト用
+])
+
+# セッションの永続化設定（Cookieの有効期限を長くする）
+app.config['PERMANENT_SESSION_LIFETIME'] = 30 * 24 * 60 * 60 # 30日間
+
+# ダミーのユーザーデータ (以前の作業で作成済みと仮定)
+PLAYER_DATA = {
+    'poke': {'username': 'poke', 'uuid': '2a7c17fa-6a24-4b45-8c7c-736ba962ab8d', 'password_hash': hashlib.sha256('testpassword'.encode()).hexdigest()},
+    'kakaomame': {'username': 'kakaomame', 'uuid': 'ccf459b8-2426-45fa-80d2-618350654c47', 'password_hash': hashlib.sha256('mypass'.encode()).hexdigest()},
+}
 
 # GitHub設定とシークレットキーを起動時にチェックする関数
 def check_config():
@@ -499,7 +519,203 @@ def get_manifest_from_github(repo_path):
 
 
 
-# --- Flask ルーティング ---
+
+
+# ------------------------------
+# 2. 認証関連ルート (GitHub Pagesからのfetch POSTに対応)
+# ------------------------------
+
+@app.route('/login', methods=['POST'])
+def login():
+    username = request.form.get('username')
+    password = request.form.get('password')
+
+    player = PLAYER_DATA.get(username)
+    
+    if player and player['password_hash'] == hashlib.sha256(password.encode()).hexdigest():
+        # 認証成功
+        session.permanent = True 
+        session['username'] = player['username']
+        session['player_uuid'] = player['uuid']
+        
+        # NOTE: Flaskはレスポンスに自動的にセッションCookie (Set-Cookie) を含めます
+        return jsonify({
+            'success': True,
+            'message': f"ログインしました。",
+            'redirect_url': 'index.html' 
+        }), 200
+    else:
+        # 認証失敗
+        return jsonify({
+            'success': False, 
+            'message': 'ユーザー名またはパスワードが違います。'
+        }), 401 
+        print("ログインページの表示…")
+
+@app.route('/api/auth/status', methods=['GET'])
+def auth_status():
+    """GitHub Pagesから現在のログイン状態をチェックするAPI"""
+    if 'username' in session:
+        return jsonify({
+            'logged_in': True,
+            'username': session['username'],
+            'uuid': session['player_uuid'],
+            # 必要に応じてプロフィール画像URLなども含める
+            'profile_img': 'https://dummyimage.com/40x40/f00/fff&text=' + session['username'][0].upper()
+        }), 200
+    else:
+        return jsonify({
+            'logged_in': False
+        }), 200
+        print("ステータスページの表示…")
+
+
+# ... /register ルートも同様にJSONを返すAPIとして実装されます ...
+
+# ------------------------------
+# 3. YouTube風 API ルート (/API/yt/*)
+# ------------------------------
+
+# --- ダミーデータ ---
+DUMMY_CHANNEL = {
+    'id': 'UCLFpG2c8yM8Rj-29K99QoXQ',
+    'name': 'カカオマメちゃんねる',
+    'subs': '1.2万',
+    'img': 'https://dummyimage.com/80x80/000/fff&text=CM',
+    'banner': 'https://dummyimage.com/1280x200/555/fff&text=Channel+Banner',
+    'desc': 'マイクラJava版配布ワールドを統合版にするための奮闘記と、日々のWeb開発記録をお届けします。',
+    'join_date': '2025-06-20',
+}
+
+def create_dummy_video(index):
+    """ダミー動画データを生成するヘルパー関数"""
+    video_id = f"v{index:03d}abcde"
+    title = f"マイクラ配布ワールド変換テスト #{index}"
+    views = f"{15000 + index * 100}回"
+    published_at = f"{index % 7 + 1}日前"
+    
+    return {
+        'video_id': video_id,
+        'title': title,
+        'thumbnail_url': f"https://dummyimage.com/320x180/007bff/fff&text={video_id}",
+        'channel_name': DUMMY_CHANNEL['name'],
+        'channel_id': DUMMY_CHANNEL['id'],
+        'views': views,
+        'published_at': published_at,
+        'description_snippet': f"この動画では、最新の変換ツールを使ってワールド#{index}を統合版にしています。成功なるか...",
+    }
+
+# --- API実装 ---
+
+@app.route('/API/yt/videos/home', methods=['GET'])
+def home_videos():
+    """index.html用の動画グリッドデータを返すAPI"""
+    videos = [create_dummy_video(i) for i in range(1, 21)]
+    return jsonify({'videos': videos}), 200
+    print("ホームに表示するvideo APIの表示…")
+    
+
+@app.route('/API/yt/search', methods=['GET'])
+def search_videos():
+    """search.html用の検索結果リストを返すAPI"""
+    query = request.args.get('q', '')
+    if not query:
+        return jsonify({'results': []}), 200
+
+    # 検索クエリに基づいたダミーデータを生成
+    results = [create_dummy_video(i) for i in range(1, 11)]
+    for i, result in enumerate(results):
+        result['title'] = f"【検索結果】{query}を含む動画 #{i+1}"
+    
+    return jsonify({'results': results}), 200
+    print("検索APIの表示…")
+
+
+@app.route('/API/yt/video', methods=['GET'])
+def video_metadata():
+    """watch.html用の単一動画メタデータを返すAPI"""
+    video_id = request.args.get('v')
+    if not video_id:
+        return jsonify({'error': 'Video ID is missing'}), 400
+
+    video_data = create_dummy_video(int(video_id.replace('v', '').replace('abcde', '')))
+    
+    # コメントデータも追加（watch.htmlで必要になる可能性）
+    video_data['comment_count'] = 125
+    video_data['comments'] = [{'author': 'PlayerA', 'text': '参考になりました！'}, {'author': 'PlayerB', 'text': '次も期待しています！'}]
+    
+    return jsonify(video_data), 200
+    print("video APIの表示…")
+
+
+@app.route('/API/yt/iframe/<video_id>', methods=['GET'])
+def video_iframe(video_id):
+    """iframeタグ用の埋め込みURLをJSONで返すAPI"""
+    # 実際には、動画ホスティングサービスから取得した埋め込みURLを返します
+    # ここでは、ダミーの再生URLを返すものとします
+    iframe_url = f"https://player.dummy-video-host.com/embed/{video_id}?autoplay=1"
+    
+    return jsonify({'iframe_url': iframe_url}), 200
+    print("動画埋め込みlink APIの表示…")
+
+
+@app.route('/API/yt/channel', methods=['GET'])
+def channel_metadata():
+    """channel/index.html用のチャンネルメタデータを返すAPI"""
+    channel_id = request.args.get('c')
+    if not channel_id:
+        return jsonify({'error': 'Channel ID is missing'}), 400
+        
+    return jsonify({
+        'channel_id': DUMMY_CHANNEL['id'],
+        'channel_name': DUMMY_CHANNEL['name'],
+        'subscriber_count': DUMMY_CHANNEL['subs'],
+        'profile_image_url': DUMMY_CHANNEL['img'],
+        'banner_image_url': DUMMY_CHANNEL['banner'],
+        'description': DUMMY_CHANNEL['desc'],
+        'join_date': DUMMY_CHANNEL['join_date']
+    }), 200
+    print("チャンネルデータAPIの表示…")
+
+@app.route('/API/yt/channel/videos', methods=['GET'])
+def channel_videos():
+    """channel/index.html用のチャンネル動画リストを返すAPI"""
+    channel_id = request.args.get('c')
+    if not channel_id:
+        return jsonify({'error': 'Channel ID is missing'}), 400
+        print("チャンネル動画データAPIの表示…")
+        
+    # ダミーで10個の動画を返します
+    videos = [create_dummy_video(i) for i in range(11, 21)]
+    return jsonify({'videos': videos}), 200
+
+
+@app.route('/API/yt/playlist', methods=['GET'])
+def playlist_data():
+    """playlist.html用の再生リストデータと動画リストを返すAPI"""
+    playlist_id = request.args.get('list')
+    if not playlist_id:
+        return jsonify({'error': 'Playlist ID is missing'}), 400
+
+    videos = [create_dummy_video(i) for i in range(1, 6)] # 5本の動画
+    
+    return jsonify({
+        'title': f"マイクラ神ワザ集 【リストID:{playlist_id}}",
+        'channel_name': DUMMY_CHANNEL['name'],
+        'description': 'マイクラで使える便利なテクニックをまとめた再生リストです。',
+        'video_count': len(videos),
+        'videos': videos
+    }), 200
+    print("プレイリストAPIの表示…")
+
+
+# ------------------------------
+# 4. アプリケーションのエントリポイント
+# ------------------------------
+
+
+
+# Vercelデプロイ用: Vercelは 'app' オブジェクトを自動でエクスポートします
 
 @app.route('/')
 def index():
@@ -527,12 +743,12 @@ def store():
     return render_template('store.html')
     
 
-from flask import Flask, request, session, jsonify
+
 # ... 他のimport (hashlibなど) は省略
 
 # ... (app = Flask(__name__), SECRET_KEYの設定、load_all_player_data関数などは省略)
 
-@app.route('/login', methods=['POST'])
+@app.route('/logins', methods=['POST'])
 # GETリクエストはGitHub Pages側で処理するため、POSTのみ残します
 def login():
     # GitHub Pagesからの fetch POST を想定
@@ -579,8 +795,8 @@ def login():
 
 # ... 他のルート（/register, /API/...）
 
-    print("ログインページを表示しました")
-   // return render_template('login.html')
+    print("ログインページ(サブ)を表示しました")
+    return render_template('login.html')
     
 
 @app.route('/logout')
