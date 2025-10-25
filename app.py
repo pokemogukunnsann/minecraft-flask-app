@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, Response, stream_with_context, jsonify
 import hashlib
+import requests
 import json
 import os
 import uuid
@@ -28,6 +29,8 @@ app = Flask(__name__)
 print("⬆️SECRET_KEYを環境変数から読み込み中⬇️")
 app.secret_key = os.environ.get('SECRET_KEY', 'your_default_secret_key_for_dev')
 
+CONFIG_URL = 'https://raw.githubusercontent.com/siawaseok3/wakame/master/video_config.json'
+DEFAULT_EMBED_BASE = 'https://www.youtubeeducation.com/embed/'
 # --- GitHub API 設定 ---
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_OWNER = os.getenv('GITHUB_OWNER')
@@ -648,15 +651,71 @@ def video_metadata():
     print("video APIの表示…")
 
 
+
+
+
 @app.route('/API/yt/iframe/<video_id>', methods=['GET'])
 def video_iframe(video_id):
-    """iframeタグ用の埋め込みURLをJSONで返すAPI"""
-    # 実際には、動画ホスティングサービスから取得した埋め込みURLを返します
-    # ここでは、ダミーの再生URLを返すものとします
-    iframe_url = f"https://player.dummy-video-host.com/embed/{video_id}?autoplay=1"
+    """
+    iframeタグ用の埋め込みURLをJSONで返すAPI
+    GitHubの設定ファイルからパラメータを動的に取得するロジックを実装。
+    """
     
-    return jsonify({'iframe_url': iframe_url}), 200
-    print("動画埋め込みlink APIの表示…")
+    # 失敗時のフォールバックURL（デフォルト）
+    fallback_url = f"{DEFAULT_EMBED_BASE}{video_id}"
+    
+    try:
+        # 1. GitHubから設定ファイルをフェッチ (タイムアウト設定推奨)
+        # NOTE: 外部リクエストには requests ライブラリを使用
+        response = requests.get(CONFIG_URL, timeout=5)
+        response.raise_for_status() # HTTPエラー (4xx, 5xx) を例外として処理
+        
+        config_data = response.json()
+        params_string = config_data.get('params', '')
+
+        # 2. パラメータのクリーニングと処理 (JSロジックの再現)
+        
+        # &amp; を & に置換 (JSロジックの再現)
+        params_string = params_string.replace('&amp;', '&')
+        
+        # クエリ文字列を辞書として解析 (parse_qsは値をリストで返す)
+        query_params = parse_qs(params_string)
+        
+        # URLSearchParamsの動作を模倣: キーが重複した場合、リストの最後の値を採用
+        final_params = {}
+        for key, value_list in query_params.items():
+            # decodeURIComponentの処理はparse_qsが自動でやってくれる
+            final_params[key] = value_list[-1]
+            
+        # URLエンコードし、クエリ文字列を構築
+        final_params_string = urlencode(final_params)
+        
+        # 3. 最終的な埋め込みURLを構築
+        embed_src = fallback_url # デフォルトをセット
+        if final_params_string:
+            embed_src += f"?{final_params_string}"
+            
+        print(f"DEBUG: Iframe URL generated with config: {embed_src}")
+        return jsonify({'iframe_url': embed_src}), 200
+        
+    except requests.exceptions.RequestException as e:
+        # 外部フェッチ失敗 (ネットワーク、404など)
+        print(f"ERROR: Config file fetch failed, falling back: {e}")
+        # フォールバックURLを返す
+        return jsonify({'iframe_url': fallback_url}), 200
+        
+    except json.JSONDecodeError as e:
+        # JSON解析失敗
+        print(f"ERROR: Config file JSON decoding failed, falling back: {e}")
+        # フォールバックURLを返す
+        return jsonify({'iframe_url': fallback_url}), 200
+        
+    except Exception as e:
+        # その他の予期せぬエラー
+        print(f"ERROR: Unexpected error in iframe API, falling back: {e}")
+        # フォールバックURLを返す
+        return jsonify({'iframe_url': fallback_url}), 200
+        print("動画埋め込みlink APIの表示…")
 
 
 @app.route('/API/yt/channel', methods=['GET'])
