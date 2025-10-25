@@ -27,6 +27,9 @@ app = Flask(__name__)
 load_dotenv()
 
 app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False # 👈 この1行で日本語のエスケープを防ぎます
+app.config['JSONIFY_MIMETYPE'] = 'application/json; charset=utf-8'
+
 #app.secret_key = os.getenv('SECRET_KEY')
 print("⬆️SECRET_KEYを環境変数から読み込み中⬇️")
 app.secret_key = os.environ.get('SECRET_KEY', 'your_default_secret_key_for_dev')
