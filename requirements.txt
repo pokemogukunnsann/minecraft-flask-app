@@ -6,3 +6,4 @@ Flask
 requests 
 python-dotenv
 noise
+flask_cors
