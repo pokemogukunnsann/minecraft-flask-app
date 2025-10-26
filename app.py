@@ -86,9 +86,6 @@ DUMMY_CHANNEL = {
 }
 
 # Pygletゲームプロセスの管理 (ロジックは省略 - 宣言のみ)
-game_process = None
-game_output_buffer = []
-game_output_lock = threading.Lock()
 
 
 # ------------------------------------------------
@@ -105,15 +102,23 @@ def extract_ytcfg_data(html_content):
     # 1. 最優先: INNERTUBE_API_KEY, CLIENT_VERSION, CLIENT_NAMEを直接探す
     # キーと値を個別に、最も緩い形式でキャプチャする（シングルクォートやバックスラッシュの心配を減らす）
     key_match = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"', html_content)
+    print(f"key:{key_match}")
     version_match = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9\.]+)"', html_content)
+    print(f"version:{version_match}")
     name_match = re.search(r'"INNERTUBE_CLIENT_NAME"\s*:\s*"([a-zA-Z0-9_]+)"', html_content)
+    print(f"name:{name_match}")
 
     if key_match:
         api_key = key_match.group(1)
         client_version = version_match.group(1) if version_match else '2.20251026.09.00' 
         client_name = name_match.group(1) if name_match else 'WEB'
         
+
+        print(f"api_key:{api_key}")
+        print(f"client_version:{client_version}")
+        print(f"client_name:{client_name}")
         print(f"DEBUG: API Key found via direct regex search: {api_key[:8]}...")
+
         return {
             'INNERTUBE_API_KEY': api_key,
             'client': {
@@ -124,6 +129,7 @@ def extract_ytcfg_data(html_content):
 
     # 2. ytcfg.set( ... ) パターン (フォールバック)
     match_ytcfg_set = re.search(r'ytcfg\.set\s*\(\s*(\{.+?\})\s*\);', html_content, re.DOTALL)
+    print(f"match_ytcfg_set:{match_ytcfg_set}")
     if match_ytcfg_set:
         try:
             cfg_string = match_ytcfg_set.group(1)
@@ -513,6 +519,7 @@ def video_iframe(video_id):
 def channel_metadata():
     """チャンネルメタデータを返すAPI。文字化け対策に create_json_response を使用。"""
     channel_id = request.args.get('c')
+    print(f"channel_id:{channel_id}")
     if not channel_id:
         return create_json_response({'error': 'Channel ID is missing'}, 400)
 
@@ -527,28 +534,37 @@ def channel_metadata():
         return create_json_response({'error': '無効なチャンネルIDまたはハンドル形式です。'}, 400)
         
     try:
+        print(f"url:{url}")
         response = requests.get(url, timeout=10)
+        print(f"response:{response}")
         response.raise_for_status()
         html_content = response.text
+        print(f"html_content:{html_content}")
         match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
+        print(f"match:{match}")
         if not match:
             return create_json_response({'error': 'Initial channel data (ytInitialData) not found.'}, 500)
         data = json.loads(match.group(1))
+        print(f"data:{data}")
 
         # 情報抽出ロジック (複雑なフォールバックロジックを統合)
         channel_info = data.get('metadata', {}).get('channelMetadataRenderer')
+        print(f"channel_info:{channel_info}")
         
         if not channel_info:
             header_data = data.get('header', {})
+            print(f"header_data:{header_data}")
             for key in ['channelHeaderRenderer', 'c4TabbedHeaderRenderer', 'engagementPanelTitleHeaderRenderer', 'pageHeaderRenderer']:
                 if key in header_data:
                     channel_info = header_data.get(key)
+                    print(f"channel_info:{channel_info}")
                     break
 
         # チャンネル名
         channel_name_obj = channel_info.get('title') or channel_info.get('pageTitle')
         channel_name = channel_name_obj.get('simpleText') if isinstance(channel_name_obj, dict) and 'simpleText' in channel_name_obj else channel_name_obj or 'チャンネル名不明'
         description = channel_info.get('description') or ''
+        print(f"channel_name_obj:{channel_name_obj}\n channel_name:{channel_name}\n description:{description}")
         
         # 登録者数
         subscriber_text = "登録者数不明"
@@ -600,6 +616,7 @@ def channel_metadata():
 def channel_videos():
     """内部 API (/youtubei/v1/browse) を使用して、チャンネルの動画リストを返す。"""
     channel_id = request.args.get('c')
+    print(f"channel_id:{channel_id}")
     if not channel_id:
         return create_json_response({'error': 'Channel ID is missing'}, 400) 
 
@@ -609,15 +626,19 @@ def channel_videos():
         url = f"https://www.youtube.com/channel/{channel_id}"
 
     try:
+        print(f"url:{url}")
         response = requests.get(url, timeout=10)
+        print(f'"response":"{response}"')
         response.raise_for_status()
         html_content = response.text
+        print(f'"html_content":"{html_content}"')
 
         # 1. 修正された extract_ytcfg_data で APIキーとクライアント情報を取得
         ytcfg = extract_ytcfg_data(html_content)
         api_key = ytcfg.get('INNERTUBE_API_KEY')
         client_name = ytcfg.get('client', {}).get('clientName', 'WEB')
         client_version = ytcfg.get('client', {}).get('clientVersion', '2.20251025.09.00')
+        print(f'"ytcfg":"{ytcfg}","api_key":"{api_key}","client_name":"{client_name}","client_version":"{client_version}"')
 
         if not api_key:
             # APIキーが取得できない場合はエラーレスポンスを返す
@@ -625,6 +646,7 @@ def channel_videos():
 
         # 2. APIエンドポイントURLとペイロードを構築
         api_url = f"https://www.youtube.com/youtubei/v1/browse?key={api_key}"
+        ptint(f'api_url:{api_url}')
         
         # Invidiousと同じ原理で、動画タブの初期C-Tokenに相当する 'params' を設定
         payload = {
@@ -648,6 +670,7 @@ def channel_videos():
 
         # 4. JSONレスポンスから動画リストを抽出 (ロジックは変更なし)
         contents_path = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [{}])
+        ptint(f'api_response:{api_response},api_data:{api_data},contents_path:{contents_path}')
         
         videos_tab_content = None
         for tab in contents_path:
