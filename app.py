@@ -603,6 +603,13 @@ def channel_metadata():
 # ※ 以下の create_json_response 関数は、Flaskアプリケーションで定義されていることを前提とします。
 # 例: def create_json_response(data, status_code): return app.response_class(response=json.dumps(data, ensure_ascii=False), status=status_code, mimetype='application/json')
 
+import requests
+import json
+import re
+from flask import request
+
+# ※ 以下の create_json_response 関数は、Flaskアプリケーションで定義されていることを前提とします。
+
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
     """キー、バージョン、VisitorDataを抽出し、リッチなコンテキストでAPIを叩く。"""
@@ -617,14 +624,13 @@ def channel_videos():
         url = f"https://www.youtube.com/channel/{channel_id}"
 
     api_key = None
-    # 🚨 最新のクライアントバージョンを設定
+    # 最新のクライアントバージョンを設定
     client_version_fallback = '2.20251027.06.45' 
     client_name = 'WEB'
     visitor_data = None 
 
     try:
         # 1. チャンネルページHTMLの取得
-        # Accept-Languageヘッダーを追加して、ブラウザからのリクエストに見せる
         headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
         response = requests.get(url, headers=headers_html, timeout=10)
         response.raise_for_status()
@@ -633,7 +639,6 @@ def channel_videos():
         # 2. APIキー、バージョン、VisitorDataを抽出
         key_match = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"', html_content)
         version_match = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9\.]+)"', html_content)
-        # VisitorDataをHTML全体から抽出
         visitor_match = re.search(r'"VISITOR_DATA"\s*:\s*"([a-zA-Z0-9%\-_=]+)"', html_content)
 
         if key_match:
@@ -644,7 +649,6 @@ def channel_videos():
             
             print(f"DEBUG: ✅ API Key found: {api_key[:8]}...")
             
-            # バージョンが古い場合、最新の固定値に上書き
             if '20251027' not in client_version: 
                  client_version = client_version_fallback
                  print(f"DEBUG: ⚠️ Version outdated/not found. Forcing latest: {client_version}")
@@ -655,8 +659,6 @@ def channel_videos():
             return create_json_response({'videos': [], 'error': '動画リスト APIキーが見つかりませんでした。'}, 500) 
 
         # 3. 内部APIのペイロード構築
-        
-        # BrowseIdの抽出
         yt_initial_data_match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
         channel_id_for_api = channel_id 
         if yt_initial_data_match:
@@ -679,22 +681,22 @@ def channel_videos():
         context_data = {
             "client": {
                 "hl": "ja", 
-                "gl": "JP", # 地域情報も追加
+                "gl": "JP",
                 "clientName": client_name,
                 "clientVersion": client_version,
                 "platform": "DESKTOP",
-                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36", # ユーザーエージェント追加
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36",
             },
             "user": {"lockedSafetyMode": False},
             "request": {"useSsl": True}
         }
         
         if visitor_data:
-             context_data['client']['visitorData'] = visitor_data # VisitorDataがあれば追加
+             context_data['client']['visitorData'] = visitor_data
         
         payload = {
             "browseId": channel_id_for_api, 
-            "params": "EgZ2aWRlb3M%3D", # VideosタブのコンテンツをリクエストするためのBase64エンコード
+            "params": "EgZ2aWRlb3M%3D",
             "context": context_data
         }
         
@@ -710,7 +712,7 @@ def channel_videos():
 
         print(f"DEBUG: ✅ API call successful! Status: {api_response.status_code}")
 
-        # 5. APIデータから動画リストを抽出（KeyError対策＆複数パス対応版）
+        # 5. APIデータから動画リストを抽出
         tabs = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
         
         video_items_container = None
@@ -728,14 +730,12 @@ def channel_videos():
                     item_section = section_content.get('itemSectionRenderer', {})
                     for item in item_section.get('contents', []):
                         
-                        # A. GridRendererを探す (専用の動画タブやフル動画リストの場合)
                         grid_renderer = item.get('gridRenderer', {})
                         if grid_renderer and grid_renderer.get('items'):
                             video_items_container = grid_renderer
                             print("DEBUG: ✅ Video items found in GridRenderer.")
                             break
 
-                        # B. ShelfRendererを探す (ホームタブの棚の場合)
                         shelf_renderer = item.get('shelfRenderer', {})
                         if shelf_renderer:
                             shelf_content = shelf_renderer.get('content', {})
@@ -761,16 +761,63 @@ def channel_videos():
         videos = []
         for item in video_renderers:
             renderer = item.get('gridVideoRenderer')
-            if not renderer: continue
+            shorts_renderer = item.get('shortsLockupViewModel')
+            
+            final_title = 'タイトル不明'
+            video_id = None
+            thumbnail_url = 'dummy'
+            views = '視聴回数不明'
+            published_at = '公開日不明'
+            
+            if renderer:
+                # --- 通常動画の処理 ---
+                video_id = renderer.get('videoId')
+                
+                # タイトル抽出ロジック（通常動画用）
+                title_obj = renderer.get('title', {})
+                # 1. Accessibilityオブジェクトからラベルを抽出
+                title_text = title_obj.get('accessibility', {}).get('accessibilityData', {}).get('label')
+                
+                if title_text:
+                    title_parts = title_text.rsplit(', ', 1)
+                    if len(title_parts) > 1 and ('前' in title_parts[-1] or '視聴' in title_parts[-1]):
+                        final_title = title_parts[0]
+                    else:
+                        final_title = title_text
+                else:
+                    # 2. runs配列からテキストを抽出（従来の方法）
+                    final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
+                
+                thumbnail_url = renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy')
+                views = renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
+                published_at = renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明')
+            
+            elif shorts_renderer:
+                # --- ショート動画の処理 (🚨 最終最適化) ---
+                video_id = shorts_renderer.get('entityId', '').replace('shorts-shelf-item-', '')
+                
+                overlay_metadata = shorts_renderer.get('overlayMetadata', {})
+                
+                # 🚨 primaryTextからタイトルを抽出
+                final_title = overlay_metadata.get('primaryText', {}).get('content', 'タイトル不明')
+                
+                # 🚨 secondaryTextから視聴回数を抽出
+                views = overlay_metadata.get('secondaryText', {}).get('content', '視聴回数不明')
+                
+                # サムネイルは専用パスから抽出
+                thumbnail_url = shorts_renderer.get('thumbnail', {}).get('sources', [{}])[0].get('url', 'dummy')
+                published_at = 'ショート動画' # ショート動画には公開日情報がないため識別子とする
 
-            videos.append({
-                'video_id': renderer.get('videoId'),
-                'title': renderer.get('title', {}).get('runs', [{}])[0].get('text', 'タイトル不明'),
-                'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
-                'channel_name': channel_id, 
-                'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
-                'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
-            })
+            
+            if video_id:
+                 videos.append({
+                    'video_id': video_id,
+                    'title': final_title,
+                    'thumbnail_url': thumbnail_url,
+                    'channel_name': channel_id, 
+                    'views': views,
+                    'published_at': published_at,
+                })
 
         return create_json_response({'videos': videos}, 200)
 
@@ -781,6 +828,14 @@ def channel_videos():
     except Exception as e:
         print(f"FATAL ERROR: Video list scraping failed: {type(e).__name__}: {e}")
         return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
+
+
+
+
+
+
+
+
 
 
 
