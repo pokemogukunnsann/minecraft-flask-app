@@ -633,9 +633,16 @@ def search_channels():
 
 # --- 検索 API 関数 ---
 
-@app.route('/API/yt/search/videos', methods=['GET'])
-def search_videos():
-    """検索キーワード(q)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
+
+
+# --- 補助関数 ---
+
+
+# --- チャンネル検索 API 関数 ---
+
+@app.route('/API/yt/search/channels', methods=['GET'])
+def search_channels():
+    """検索キーワード(q)または継続トークン(continuation)を受け取り、チャンネルリストと次の継続トークンを返す。"""
     
     query_keyword = request.args.get('q')
     continuation_token = request.args.get('continuation') # 🚨 継続トークンをチェック
@@ -645,7 +652,7 @@ def search_videos():
 
     # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
     api_key = None
-    client_version_fallback = get_dynamic_client_version()
+    client_version_fallback = get_dynamic_client_version() # 🚨 動的バージョン設定
     client_name = 'WEB'
     visitor_data = None 
     url = "https://www.youtube.com/" 
@@ -670,7 +677,7 @@ def search_videos():
             if client_version == client_version_fallback or not version_match: 
                  client_version = client_version_fallback
         else:
-            return create_json_response({'videos': [], 'error': '検索 APIキーが見つかりませんでした。'}, 500) 
+            return create_json_response({'channels': [], 'error': '検索 APIキーが見つかりませんでした。'}, 500) 
 
         # 3. 内部APIのペイロード構築
         context_data = {
@@ -691,19 +698,18 @@ def search_videos():
         
         # 🚨 検索の種類とAPI URLを分岐: 継続トークンがあれば /browse、なければ /search
         if continuation_token:
-            # Continuation リクエスト
+            # Continuation リクエストは /browse エンドポイントを使用
             api_url_path = "/youtubei/v1/browse"
             payload = {
                 "continuation": continuation_token, # 🚨 continuation をペイロードに設定
                 "context": context_data
             }
         else:
-            # 初期検索リクエスト
+            # 初期検索リクエストは /search エンドポイントを使用
             api_url_path = "/youtubei/v1/search"
             payload = {
                 "query": query_keyword, 
-                "params": "EgIQAQ%3D%3D", # 動画フィルタ
-                "context": context_data
+                "context": context_data # チャンネル検索のため params は設定しない (全検索結果を取得)
             }
 
         api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
@@ -717,68 +723,62 @@ def search_videos():
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
         api_response.raise_for_status() 
         api_data = api_response.json()
-    
-        # 5. APIデータから動画リストを抽出（ページネーション対応）
+
+        # 5. APIデータからチャンネルリストを抽出（ページネーション対応）
         
         if continuation_token:
             # Continuation のレスポンスからアイテムを取得
-            # 継続リクエストのレスポンス構造は onResponseReceivedCommands の中にあります
             continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
-            video_items_container = continuation_items
+            channel_items_container = continuation_items
         else:
             # 初期検索のレスポンスからアイテムを取得
             section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
             
-            # 通常、最初の itemSectionRenderer の contents に動画リストがあります
             if section_list_contents and 'itemSectionRenderer' in section_list_contents[0]:
-                video_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
+                channel_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
             else:
-                video_items_container = []
+                channel_items_container = []
 
-        videos = []
+        channels = []
         next_continuation = None # 🚨 次の継続トークン
 
-        for item in video_items_container:
+        for item in channel_items_container:
             # 継続トークンを抽出
             continuation_item = item.get('continuationItemRenderer')
             if continuation_item:
                 next_continuation = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
-                continue # トークンは動画ではないのでスキップ
+                continue
                 
-            # 動画レンダラー抽出
-            renderer = item.get('videoRenderer') 
+            # 既存のチャンネルレンダラー抽出ロジック
+            renderer = item.get('channelRenderer') 
             if not renderer: continue
 
-            # 動画情報の抽出
-            video_id = renderer.get('videoId')
+            # 6. チャンネルレンダラーから必要な情報を抽出
+            channel_id = renderer.get('channelId')
             title_obj = renderer.get('title', {})
-            final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
-            duration = renderer.get('lengthText', {}).get('simpleText', '')
-            if duration:
-                 final_title = f"{final_title} ({duration})"
+            channel_name = title_obj.get('simpleText', 'チャンネル名不明')
             
-            owner_text = renderer.get('ownerText', {}).get('runs', [{}])[0]
-            channel_name = owner_text.get('text', 'チャンネル名不明')
-            channel_id_link = owner_text.get('navigationEndpoint', {}).get('browseEndpoint', {}).get('browseId')
+            subscribers_text = renderer.get('navigationEndpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('text')
+            if not subscribers_text:
+                subscribers_text = renderer.get('subscriberCountText', {}).get('simpleText', '登録者数不明')
             
-            videos.append({
-                'video_id': video_id,
-                'title': final_title,
-                'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
-                'channel_name': channel_name, 
-                'channel_id': channel_id_link,
-                'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
-                'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
+            thumbnail_url = renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy')
+
+            channels.append({
+                'channel_id': channel_id,
+                'channel_name': channel_name,
+                'thumbnail_url': thumbnail_url,
+                'subscribers': subscribers_text, 
             })
 
-        # 🚨 戻り値に next_continuation を追加して返す
-        return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
+        # 🚨 戻り値に next_continuation を追加
+        return create_json_response({'channels': channels, 'next_continuation': next_continuation}, 200)
 
     except requests.exceptions.HTTPError as e:
-        error_message = f'検索 APIコールが失敗しました: {e.response.status_code}'
+        error_message = f'チャンネル検索 APIコールが失敗しました: {e.response.status_code}'
         return create_json_response({'error': error_message}, 503)
     except Exception as e:
-        return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
+        return create_json_response({'error': f'チャンネル検索の取得に失敗しました: {type(e).__name__}'}, 500)
 
 
 
@@ -938,32 +938,45 @@ def channel_metadata():
 import requests
 import json
 import re
-from flask import request
+from flask import request, jsonify
+import datetime
 
-# ※ 以下の create_json_response 関数は、Flaskアプリケーションで定義されていることを前提とします。
+# --- 補助関数 (app.pyに定義済みを前提) ---
+
+def create_json_response(data, status):
+    return jsonify(data), status
+
+def get_dynamic_client_version():
+    """現在の日付に基づいた YouTube クライアントバージョンを生成する"""
+    now = datetime.datetime.now()
+    date_str = now.strftime('%Y%m%d')
+    return f"2.{date_str}.06.45"
+
+# --- チャンネル動画リスト取得 API 関数 ---
 
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
-    """キー、バージョン、VisitorDataを抽出し、リッチなコンテキストでAPIを叩く。"""
+    """チャンネルID(c)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
     
     channel_id = request.args.get('c')
-    if not channel_id:
-        return create_json_response({'error': 'Channel ID is missing'}, 400) 
+    continuation_token = request.args.get('continuation') # 🚨 継続トークンをチェック
 
-    if channel_id.startswith('@'):
-        url = f"https://www.youtube.com/{channel_id}"
-    else:
-        url = f"https://www.youtube.com/channel/{channel_id}"
+    if not continuation_token and not channel_id:
+        return create_json_response({'error': 'チャンネルID (c) または継続トークンがありません'}, 400) 
 
+    # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
     api_key = None
-    # 最新のクライアントバージョンを設定
-    client_version_fallback = get_dynamic_client_version() 
+    client_version_fallback = get_dynamic_client_version() # 🚨 動的バージョン設定
     client_name = 'WEB'
     visitor_data = None 
-
+    
+    # チャンネルの動画タブのURL
+    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    
     try:
-        # 1. チャンネルページHTMLの取得
+        # 1. YouTubeチャンネル動画タブのHTMLを取得 (APIキーなどを取得)
         headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
+        # 継続リクエストの場合はHTML取得はスキップ可能だが、VisitorData等の再取得のため初期リクエストに合わせる
         response = requests.get(url, headers=headers_html, timeout=10)
         response.raise_for_status()
         html_content = response.text
@@ -975,41 +988,15 @@ def channel_videos():
 
         if key_match:
             api_key = key_match.group(1)
-            
             client_version = version_match.group(1) if version_match else client_version_fallback
             visitor_data = visitor_match.group(1) if visitor_match else None
             
-            print(f"DEBUG: ✅ API Key found: {api_key[:8]}...")
-            
-            if '20251027' not in client_version: 
+            if client_version == client_version_fallback or not version_match: 
                  client_version = client_version_fallback
-                 print(f"DEBUG: ⚠️ Version outdated/not found. Forcing latest: {client_version}")
-            
-            print(f"DEBUG: ⚙️ Client Version: {client_version}")
-            print(f"DEBUG: ⚙️ VisitorData found: {bool(visitor_data)}")
         else:
-            return create_json_response({'videos': [], 'error': '動画リスト APIキーが見つかりませんでした。'}, 500) 
+            return create_json_response({'videos': [], 'error': 'APIキーが見つかりませんでした。'}, 500) 
 
         # 3. 内部APIのペイロード構築
-        yt_initial_data_match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
-        channel_id_for_api = channel_id 
-        if yt_initial_data_match:
-            try:
-                yt_data = json.loads(yt_initial_data_match.group(1))
-                extracted_browse_id = yt_data.get('header', {}).get('c4TabbedHeaderRenderer', {}).get('channelId')
-                if not extracted_browse_id:
-                     extracted_browse_id = yt_data.get('metadata', {}).get('channelMetadataRenderer', {}).get('externalId')
-                
-                if extracted_browse_id:
-                    channel_id_for_api = extracted_browse_id
-            except json.JSONDecodeError:
-                print("DEBUG: ❌ ytInitialData JSON デコードエラー。BrowseId抽出スキップ。")
-        
-        print(f"DEBUG: ⚙️ API BrowseId: {channel_id_for_api}")
-
-        # 4. 内部APIを叩く
-        api_url = f"https://www.youtube.com/youtubei/v1/browse?key={api_key}"
-        
         context_data = {
             "client": {
                 "hl": "ja", 
@@ -1026,140 +1013,51 @@ def channel_videos():
         if visitor_data:
              context_data['client']['visitorData'] = visitor_data
         
-        payload = {
-            "browseId": channel_id_for_api, 
-            "params": "EgZ2aWRlb3M%3D",
-            "context": context_data
-        }
-        
-        headers_api = {
-            'Content-Type': 'application/json',
-            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
-        }
-        
-        print(f"DEBUG: 🚀 Posting API request with clientVersion: {client_version}...")
-        api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
-        api_response.raise_for_status() 
-        api_data = api_response.json()
+        # 🚨 検索の種類とAPI URLを分岐: 継続トークンがあれば /browse、なければ /browse
+        api_url_path = "/youtubei/v1/browse"
+        api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
 
-        print(f"DEBUG: ✅ API call successful! Status: {api_response.status_code}")
+        if continuation_token:
+            # Continuation リクエスト
+            payload = {
+                "continuation": continuation_token, # 🚨 continuation をペイロードに設定
+                "context": context_data
+            }
+        else:
+            # 初期リクエスト (動画タブの browseId を抽出)
+            # チャンネルページHTMLから動画タブに対応するトークンを抽出する
+            token_match = re.search(r'"browseId":"UC.+?"', html_content)
+            if not token_match:
+                return create_json_response({'error': '初期動画リストのトークンが見つかりませんでした。'}, 500) 
 
-        # 5. APIデータから動画リストを抽出
-        tabs = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
-        
-        video_items_container = None
-        
-        for tab in tabs:
-            tab_renderer = tab.get('tabRenderer', {})
-            tab_title = tab_renderer.get('title')
-
-            if tab_title in ['Videos', '動画', 'アップロード', 'ホーム']:
-                
-                content = tab_renderer.get('content', {})
-                section_list = content.get('sectionListRenderer', {})
-
-                for section_content in section_list.get('contents', []):
-                    item_section = section_content.get('itemSectionRenderer', {})
-                    for item in item_section.get('contents', []):
-                        
-                        grid_renderer = item.get('gridRenderer', {})
-                        if grid_renderer and grid_renderer.get('items'):
-                            video_items_container = grid_renderer
-                            print("DEBUG: ✅ Video items found in GridRenderer.")
-                            break
-
-                        shelf_renderer = item.get('shelfRenderer', {})
-                        if shelf_renderer:
-                            shelf_content = shelf_renderer.get('content', {})
-                            horizontal_list = shelf_content.get('horizontalListRenderer', {})
-                            
-                            if horizontal_list and horizontal_list.get('items'):
-                                video_items_container = horizontal_list
-                                print("DEBUG: ✅ Video items found in HorizontalListRenderer.")
-                                break
-                    
-                    if video_items_container:
-                        break
-                
-                if video_items_container:
-                    break
-        
-        if not video_items_container:
-            print("ERROR: 動画リストのコンテンツ構造が見つかりませんでした。")
-            return create_json_response({'videos': [], 'error': '動画リストのコンテンツ構造が見つかりませんでした。APIのJSON構造が変更された可能性があります。'}, 500) 
-
-        # 6. 動画レンダラーから必要な情報を抽出
-        video_renderers = video_items_container.get('items', [])
-        videos = []
-        for item in video_renderers:
-            renderer = item.get('gridVideoRenderer')
-            shorts_renderer = item.get('shortsLockupViewModel')
+            # 動画タブは "FE_FOR_CHANNEL_VIDEOS" に対応するトークンを探すのが最も確実だが、
+            # 簡略化のため、ここではチャネルIDをそのまま利用
+            # 🚨 実際の動画タブのデータを読み込むためのトークン/IDをHTMLから探すロジックが必要だが、
+            # 以前のバージョンでブラウズIDを取得するロジックを簡略化して channelId を使っていた場合、
+            # ここでは channelId をトークンとして使うか、継続トークンと同じペイロード形式を使うかの工夫が必要。
+            # 今回は、継続トークンがない場合は **channelId を使って最初の動画リストを読み込む**構造を維持する
             
-            final_title = 'タイトル不明'
-            video_id = None
-            thumbnail_url = 'dummy'
-            views = '視聴回数不明'
-            published_at = '公開日不明'
+            # YouTubeの仕様変更により、動画タブのコンテンツはトークンでのみ取得できるようになったため、
+            # HTMLから動画タブのトークン (タブのURLに付随するデータ) を抽出する必要があります。
+            # ここでは、簡略化のため、**動画タブのトークン**をHTMLから抽出します。
             
-            if renderer:
-                # --- 通常動画の処理 ---
-                video_id = renderer.get('videoId')
-                
-                # タイトル抽出ロジック（通常動画用）
-                title_obj = renderer.get('title', {})
-                # 1. Accessibilityオブジェクトからラベルを抽出
-                title_text = title_obj.get('accessibility', {}).get('accessibilityData', {}).get('label')
-                
-                if title_text:
-                    title_parts = title_text.rsplit(', ', 1)
-                    if len(title_parts) > 1 and ('前' in title_parts[-1] or '視聴' in title_parts[-1]):
-                        final_title = title_parts[0]
-                    else:
-                        final_title = title_text
+            # 動画タブのトークン (タブのURLに付随するデータ) を抽出
+            token_match_videos = re.search(r'{"tabRenderer":{"endpoint":{"commandMetadata":{"webCommandMetadata":{"url":"/channel/.+?/videos"}},"browseEndpoint":{"browseId":".+?","params":"([^"]+?)"}},"title":"動画"', html_content)
+            
+            if not token_match_videos:
+                # チャンネル動画ページ全体から最初のセクションのトークンを取得する（フォールバック）
+                token_match_fallback = re.search(r'"continuationEndpoint":\{"continuationCommand":\{"token":"([^"]+?)"\}', html_content)
+                if token_match_fallback:
+                    first_continuation = token_match_fallback.group(1)
+                    # 初期リクエストも継続リクエストと同じペイロード構造で送る
+                    payload = {
+                        "continuation": first_continuation,
+                        "context": context_data
+                    }
                 else:
-                    # 2. runs配列からテキストを抽出（従来の方法）
-                    final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
-                
-                thumbnail_url = renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy')
-                views = renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
-                published_at = renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明')
-            
-            elif shorts_renderer:
-                # --- ショート動画の処理 (🚨 最終最適化) ---
-                video_id = shorts_renderer.get('entityId', '').replace('shorts-shelf-item-', '')
-                
-                overlay_metadata = shorts_renderer.get('overlayMetadata', {})
-                
-                # 🚨 primaryTextからタイトルを抽出
-                final_title = overlay_metadata.get('primaryText', {}).get('content', 'タイトル不明')
-                
-                # 🚨 secondaryTextから視聴回数を抽出
-                views = overlay_metadata.get('secondaryText', {}).get('content', '視聴回数不明')
-                
-                # サムネイルは専用パスから抽出
-                thumbnail_url = shorts_renderer.get('thumbnail', {}).get('sources', [{}])[0].get('url', 'dummy')
-                published_at = 'ショート動画' # ショート動画には公開日情報がないため識別子とする
-
-            
-            if video_id:
-                 videos.append({
-                    'video_id': video_id,
-                    'title': final_title,
-                    'thumbnail_url': thumbnail_url,
-                    'channel_name': channel_id, 
-                    'views': views,
-                    'published_at': published_at,
-                })
-
-        return create_json_response({'videos': videos}, 200)
-
-    except requests.exceptions.HTTPError as e:
-        print(f"ERROR: API POST failed. Status: {e.response.status_code}. Response: {e.response.text[:200]}...")
-        error_message = f'動画リスト APIコールが失敗しました: {e.response.status_code}'
-        return create_json_response({'error': error_message}, 503)
-    except Exception as e:
-        print(f"FATAL ERROR: Video list scraping failed: {type(e).__name__}: {e}")
-        return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
+                    return create_json_response({'error': '初期動画リストのトークン/継続トークンが見つかりませんでした。'}, 500) 
+            else:
+                # 動画タブのParamsを使う場合 (channel_videosの場合は
 
 
 
