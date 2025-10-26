@@ -3,6 +3,7 @@ import hashlib
 import requests
 import json
 import os
+import datetime
 import re
 import uuid
 import requests
@@ -92,6 +93,30 @@ DUMMY_CHANNEL = {
 # ------------------------------------------------
 # 1. ヘルパー関数 (ユーティリティ / GitHub API)
 # ------------------------------------------------
+def get_dynamic_client_version():
+    """現在の日付に基づいた YouTube クライアントバージョンを生成する"""
+    # 現在時刻を取得
+    now = datetime.datetime.now()
+    # YYYYMMDD 形式の文字列を生成
+    date_str = now.strftime('%Y%m%d')
+    
+    # 過去の成功ログ（例: 2.20251027.06.45）に基づき、
+    # 日付部分のみを動的に変更し、後のビルド番号を固定値として利用
+    return f"2.{date_str}.08.00"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def extract_api_keys(html_content):
     """
     HTMLコンテンツからAIzaSyで始まるAPIキーをすべて抽出し、ユニークなリストとして返す。
