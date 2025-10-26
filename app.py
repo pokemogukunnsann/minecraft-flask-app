@@ -631,7 +631,7 @@ def search_channels():
 
 # --- 検索 API 関数 ---
 
-@app.route('/API/yt/search/videos', methods=['GET'])
+@app.route('/API/yt/search', methods=['GET'])
 def search_videos():
     """検索キーワード(q)を受け取り、YouTube内部検索APIを叩いて動画リストを返す。"""
     
