@@ -712,29 +712,68 @@ def channel_videos():
         print(f"DEBUG: ✅ API call successful! Status: {api_response.status_code}")
 
         # 5. APIデータから動画リストを抽出（ロジックは変更なし）
-        contents_path = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [{}])
+　　　　　tabs = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
         
-        videos_tab_content = None
-        for tab in contents_path:
-             if tab.get('tabRenderer', {}).get('title') in ['Videos', '動画', 'アップロード']:
-                 videos_tab_content = tab['tabRenderer']['content'] \
-                                         .get('sectionListRenderer', {}).get('contents', [{}])[0] \
-                                         .get('itemSectionRenderer', {}).get('contents', [{}])[0] \
-                                         .get('gridRenderer', {})
-                 break
+        video_items_container = None
         
-        if not videos_tab_content:
-            return create_json_response({'videos': [], 'error': '動画リストのコンテンツ構造が見つかりませんでした。'}, 500) 
+        # 2. 全てのタブをループし、動画リストを探す
+        for tab in tabs:
+            tab_renderer = tab.get('tabRenderer', {})
+            tab_title = tab_renderer.get('title')
 
-        video_renderers = videos_tab_content.get('items', [])
+            # 動画リストが存在する可能性のあるタブを探る
+            if tab_title in ['Videos', '動画', 'アップロード', 'ホーム']:
+                
+                content = tab_renderer.get('content', {})
+                section_list = content.get('sectionListRenderer', {})
+
+                # 3. Section List のコンテンツをループ
+                for section_content in section_list.get('contents', []):
+                    item_section = section_content.get('itemSectionRenderer', {})
+                    for item in item_section.get('contents', []):
+                        
+                        # A. GridRendererを探す (専用の動画タブやフル動画リストの場合)
+                        grid_renderer = item.get('gridRenderer', {})
+                        if grid_renderer and grid_renderer.get('items'):
+                            video_items_container = grid_renderer
+                            print("DEBUG: ✅ Video items found in GridRenderer.")
+                            break
+
+                        # B. ShelfRendererを探す (ホームタブの棚の場合 - 今回のログの構造)
+                        shelf_renderer = item.get('shelfRenderer', {})
+                        if shelf_renderer:
+                            # タイトルが '動画' の棚、またはタイトルがない棚を探す
+                            shelf_title = shelf_renderer.get('title', {}).get('runs', [{}])[0].get('text')
+                            if shelf_title in ['動画', 'Popular uploads', '']:
+                                 # 横並びの動画リスト (HorizontalListRenderer) を取得
+                                 horizontal_list = shelf_renderer.get('content', {}).get('horizontalListRenderer', {})
+                                 if horizontal_list and horizontal_list.get('items'):
+                                     video_items_container = horizontal_list
+                                     print("DEBUG: ✅ Video items found in HorizontalListRenderer.")
+                                     break
+                    
+                    if video_items_container:
+                        break
+                
+                if video_items_container:
+                    break
+        
+        if not video_items_container:
+            print("ERROR: 動画リストのコンテンツ構造が見つかりませんでした。")
+            return create_json_response({'videos': [], 'error': '動画リストのコンテンツ構造が見つかりませんでした。APIのJSON構造が変更された可能性があります。'}, 500) 
+
+        # 6. 動画レンダラーから必要な情報を抽出
+        video_renderers = video_items_container.get('items', [])
         videos = []
         for item in video_renderers:
+            # GridRenderer のアイテムには gridVideoRenderer、HorizontalListRenderer のアイテムにも gridVideoRenderer が含まれる
             renderer = item.get('gridVideoRenderer')
             if not renderer: continue
 
             videos.append({
                 'video_id': renderer.get('videoId'),
                 'title': renderer.get('title', {}).get('runs', [{}])[0].get('text', 'タイトル不明'),
+                # サムネイルは配列の最後の要素を取得するのが一般的
                 'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
                 'channel_name': channel_id, 
                 'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
@@ -742,6 +781,41 @@ def channel_videos():
             })
 
         return create_json_response({'videos': videos}, 200)
+
+
+
+        
+
+
+
+
+
+
+
+        
+
+
+        
+
+
+        
+
+
+        
+
+
+
+
+
+        
+
+
+
+
+
+        
+
+
 
     except requests.exceptions.HTTPError as e:
         print(f"ERROR: API POST failed. Status: {e.response.status_code}. Response: {e.response.text[:200]}...")
