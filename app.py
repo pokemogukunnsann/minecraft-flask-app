@@ -707,6 +707,7 @@ def channel_videos():
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
         api_response.raise_for_status() 
         api_data = api_response.json()
+        print(f"api_data:{api_data}")
 
         print(f"DEBUG: ✅ API call successful! Status: {api_response.status_code}")
 
