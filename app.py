@@ -599,11 +599,13 @@ def channel_metadata():
 # --- ヘルパー関数は使用せず、この関数内で直接キーを抽出します ---
 # ※ Flaskアプリ内で、requests, json, re, create_json_responseがインポートされていることを前提とします。
 
+
+# ※ 以下の create_json_response 関数は、Flaskアプリケーションで定義されていることを前提とします。
+# 例: def create_json_response(data, status_code): return app.response_class(response=json.dumps(data, ensure_ascii=False), status=status_code, mimetype='application/json')
+
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
     """キー、バージョン、VisitorDataを抽出し、リッチなコンテキストでAPIを叩く。"""
-    import re
-    import json
     
     channel_id = request.args.get('c')
     if not channel_id:
@@ -615,13 +617,14 @@ def channel_videos():
         url = f"https://www.youtube.com/channel/{channel_id}"
 
     api_key = None
-    # 🚨 最新のクライアントバージョンを設定！
+    # 🚨 最新のクライアントバージョンを設定
     client_version_fallback = '2.20251027.06.45' 
     client_name = 'WEB'
     visitor_data = None 
 
     try:
         # 1. チャンネルページHTMLの取得
+        # Accept-Languageヘッダーを追加して、ブラウザからのリクエストに見せる
         headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
         response = requests.get(url, headers=headers_html, timeout=10)
         response.raise_for_status()
@@ -630,21 +633,18 @@ def channel_videos():
         # 2. APIキー、バージョン、VisitorDataを抽出
         key_match = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"', html_content)
         version_match = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9\.]+)"', html_content)
+        # VisitorDataをHTML全体から抽出
         visitor_match = re.search(r'"VISITOR_DATA"\s*:\s*"([a-zA-Z0-9%\-_=]+)"', html_content)
 
         if key_match:
             api_key = key_match.group(1)
             
-            # クライアントバージョン (ピリオド区切り)
             client_version = version_match.group(1) if version_match else client_version_fallback
-            
-            # VisitorData
             visitor_data = visitor_match.group(1) if visitor_match else None
             
             print(f"DEBUG: ✅ API Key found: {api_key[:8]}...")
             
-            # 🚨 バージョンが古い場合、最新の固定値に上書き
-            # 日付部分（20251027）が含まれていなければ、固定値を適用
+            # バージョンが古い場合、最新の固定値に上書き
             if '20251027' not in client_version: 
                  client_version = client_version_fallback
                  print(f"DEBUG: ⚠️ Version outdated/not found. Forcing latest: {client_version}")
@@ -654,9 +654,9 @@ def channel_videos():
         else:
             return create_json_response({'videos': [], 'error': '動画リスト APIキーが見つかりませんでした。'}, 500) 
 
-        # --- 3. 内部APIのペイロード構築 ---
+        # 3. 内部APIのペイロード構築
         
-        # --- BrowseIdの抽出 ---
+        # BrowseIdの抽出
         yt_initial_data_match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
         channel_id_for_api = channel_id 
         if yt_initial_data_match:
@@ -679,22 +679,22 @@ def channel_videos():
         context_data = {
             "client": {
                 "hl": "ja", 
-                "gl": "JP",
+                "gl": "JP", # 地域情報も追加
                 "clientName": client_name,
-                "clientVersion": client_version, # 最新の固定値を使用
+                "clientVersion": client_version,
                 "platform": "DESKTOP",
-                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36",
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36", # ユーザーエージェント追加
             },
             "user": {"lockedSafetyMode": False},
             "request": {"useSsl": True}
         }
         
         if visitor_data:
-             context_data['client']['visitorData'] = visitor_data
+             context_data['client']['visitorData'] = visitor_data # VisitorDataがあれば追加
         
         payload = {
             "browseId": channel_id_for_api, 
-            "params": "EgZ2aWRlb3M%3D", 
+            "params": "EgZ2aWRlb3M%3D", # VideosタブのコンテンツをリクエストするためのBase64エンコード
             "context": context_data
         }
         
@@ -707,27 +707,23 @@ def channel_videos():
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
         api_response.raise_for_status() 
         api_data = api_response.json()
-        print(f"api_data:{api_data}")
 
         print(f"DEBUG: ✅ API call successful! Status: {api_response.status_code}")
 
-        # 5. APIデータから動画リストを抽出（ロジックは変更なし）
-　　　　　tabs = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
+        # 5. APIデータから動画リストを抽出（KeyError対策＆複数パス対応版）
+        tabs = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
         
         video_items_container = None
         
-        # 2. 全てのタブをループし、動画リストを探す
         for tab in tabs:
             tab_renderer = tab.get('tabRenderer', {})
             tab_title = tab_renderer.get('title')
 
-            # 動画リストが存在する可能性のあるタブを探る
             if tab_title in ['Videos', '動画', 'アップロード', 'ホーム']:
                 
                 content = tab_renderer.get('content', {})
                 section_list = content.get('sectionListRenderer', {})
 
-                # 3. Section List のコンテンツをループ
                 for section_content in section_list.get('contents', []):
                     item_section = section_content.get('itemSectionRenderer', {})
                     for item in item_section.get('contents', []):
@@ -739,18 +735,16 @@ def channel_videos():
                             print("DEBUG: ✅ Video items found in GridRenderer.")
                             break
 
-                        # B. ShelfRendererを探す (ホームタブの棚の場合 - 今回のログの構造)
+                        # B. ShelfRendererを探す (ホームタブの棚の場合)
                         shelf_renderer = item.get('shelfRenderer', {})
                         if shelf_renderer:
-                            # タイトルが '動画' の棚、またはタイトルがない棚を探す
-                            shelf_title = shelf_renderer.get('title', {}).get('runs', [{}])[0].get('text')
-                            if shelf_title in ['動画', 'Popular uploads', '']:
-                                 # 横並びの動画リスト (HorizontalListRenderer) を取得
-                                 horizontal_list = shelf_renderer.get('content', {}).get('horizontalListRenderer', {})
-                                 if horizontal_list and horizontal_list.get('items'):
-                                     video_items_container = horizontal_list
-                                     print("DEBUG: ✅ Video items found in HorizontalListRenderer.")
-                                     break
+                            shelf_content = shelf_renderer.get('content', {})
+                            horizontal_list = shelf_content.get('horizontalListRenderer', {})
+                            
+                            if horizontal_list and horizontal_list.get('items'):
+                                video_items_container = horizontal_list
+                                print("DEBUG: ✅ Video items found in HorizontalListRenderer.")
+                                break
                     
                     if video_items_container:
                         break
@@ -766,14 +760,12 @@ def channel_videos():
         video_renderers = video_items_container.get('items', [])
         videos = []
         for item in video_renderers:
-            # GridRenderer のアイテムには gridVideoRenderer、HorizontalListRenderer のアイテムにも gridVideoRenderer が含まれる
             renderer = item.get('gridVideoRenderer')
             if not renderer: continue
 
             videos.append({
                 'video_id': renderer.get('videoId'),
                 'title': renderer.get('title', {}).get('runs', [{}])[0].get('text', 'タイトル不明'),
-                # サムネイルは配列の最後の要素を取得するのが一般的
                 'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
                 'channel_name': channel_id, 
                 'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
@@ -782,46 +774,9 @@ def channel_videos():
 
         return create_json_response({'videos': videos}, 200)
 
-
-
-        
-
-
-
-
-
-
-
-        
-
-
-        
-
-
-        
-
-
-        
-
-
-
-
-
-        
-
-
-
-
-
-        
-
-
-
     except requests.exceptions.HTTPError as e:
         print(f"ERROR: API POST failed. Status: {e.response.status_code}. Response: {e.response.text[:200]}...")
         error_message = f'動画リスト APIコールが失敗しました: {e.response.status_code}'
-        if e.response.status_code == 400:
-            error_message += " (すべてのコンテキスト引数を追加しましたが、ClientVersionかVisitorDataが無効な可能性が残ります)"
         return create_json_response({'error': error_message}, 503)
     except Exception as e:
         print(f"FATAL ERROR: Video list scraping failed: {type(e).__name__}: {e}")
