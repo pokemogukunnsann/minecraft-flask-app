@@ -457,91 +457,72 @@ def video_iframe(video_id):
         print(f"ERROR: Config or network error: {e}")
         return jsonify({'iframe_url': fallback_url}), 200
 
-@app.route('/API/yt/channel', methods=['GET'])
-def channel_metadata():
-    """チャンネルメタデータを返すAPI。文字化け対策に create_json_response を使用。"""
-    channel_id = request.args.get('c')
-    if not channel_id:
-        return create_json_response({'error': 'Channel ID is missing'}, 400)
+import re
+import json
 
-    # URLの構築
-    if channel_id.startswith('@'):
-        url = f"https://www.youtube.com/{channel_id}"
-    elif channel_id.startswith('UC') and len(channel_id) >= 20:
-        url = f"https://www.youtube.com/channel/{channel_id}"
-    elif ' ' not in channel_id and '/' not in channel_id:
-        url = f"https://www.youtube.com/@{channel_id}"
-    else:
-        return create_json_response({'error': '無効なチャンネルIDまたはハンドル形式です。'}, 400)
-        
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        html_content = response.text
-        match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
-        if not match:
-            return create_json_response({'error': 'Initial channel data (ytInitialData) not found.'}, 500)
-        data = json.loads(match.group(1))
+# ... (既存のコード) ...
 
-        # 情報抽出ロジック (ユーザー提供の複雑なフォールバックロジックを統合)
-        channel_info = data.get('metadata', {}).get('channelMetadataRenderer')
-        
-        if not channel_info:
-            header_data = data.get('header', {})
-            for key in ['channelHeaderRenderer', 'c4TabbedHeaderRenderer', 'engagementPanelTitleHeaderRenderer', 'pageHeaderRenderer']:
-                if key in header_data:
-                    channel_info = header_data.get(key)
-                    break
+def extract_ytcfg_data(html_content):
+    """
+    HTMLからYouTube内部設定 (ytcfg) を抽出し、INNERTUBE_API_KEYを取得する。
+    複数のパターンを試し、堅牢性を向上させる。
+    """
+    
+    # 1. ytcfg.set( ... ) パターン (最も新しい形式)
+    # 正規表現: 'ytcfg.set' の後に続く括弧内のJSONオブジェクトをキャプチャ
+    match_ytcfg_set = re.search(r'ytcfg\.set\s*\(\s*(\{.+?\})\s*\);', html_content, re.DOTALL)
+    if match_ytcfg_set:
+        try:
+            cfg_string = match_ytcfg_set.group(1)
+            # JSONとしてデコードを試みる
+            ytcfg = json.loads(cfg_string)
+            if ytcfg.get('INNERTUBE_API_KEY'):
+                print("DEBUG: API Key found via ytcfg.set pattern.")
+                return ytcfg
+            
+        except json.JSONDecodeError as e:
+            # デコード失敗時は次のパターンへ
+            print(f"DEBUG: ytcfg.set JSON Decode Error: {e}")
+            pass
 
-        # チャンネル名
-        channel_name_obj = channel_info.get('title') or channel_info.get('pageTitle')
-        channel_name = channel_name_obj.get('simpleText') if isinstance(channel_name_obj, dict) and 'simpleText' in channel_name_obj else channel_name_obj or 'チャンネル名不明'
-        description = channel_info.get('description') or ''
-        
-        # 登録者数
-        subscriber_text = "登録者数不明"
-        if 'header' in data:
-            for key in data['header'].keys():
-                if key.endswith('HeaderRenderer'):
-                    sub_obj = data['header'][key].get('subscriberCountText') or data['header'][key].get('subscribersText')
-                    if sub_obj and isinstance(sub_obj, dict) and 'simpleText' in sub_obj:
-                        subscriber_text = sub_obj['simpleText']
-                        break
-        
-        # プロフィール画像
-        avatar_obj = channel_info.get('avatar') or channel_info.get('image')
-        profile_img_url = 'https://dummyimage.com/80x80/000/fff&text=CM'
-        if avatar_obj and avatar_obj.get('thumbnails'):
-             profile_img_url = avatar_obj.get('thumbnails', [{}])[-1].get('url', profile_img_url)
-        elif avatar_obj and avatar_obj.get('decoratedAvatarViewModel', {}).get('avatar', {}).get('avatarViewModel', {}).get('image', {}).get('sources'):
-             sources = avatar_obj['decoratedAvatarViewModel']['avatar']['avatarViewModel']['image']['sources']
-             profile_img_url = sources[-1]['url']
-        
-        # 最終結果をJSONで返す 
-        final_data = {
-            'channel_id': channel_id,
-            'channel_name': channel_name,
-            'subscriber_count': subscriber_text,
-            'profile_image_url': profile_img_url,
-            'banner_image_url': '', 
-            'description': description,
-            'join_date': ''
-        }
-        return create_json_response(final_data, 200)
+    # 2. window["ytcfg"] = { ... } パターン (新しい形式のフォールバック)
+    match_window_ytcfg = re.search(r'window\["ytcfg"\]\s*=\s*(\{.+?\})\s*;', html_content, re.DOTALL)
+    if match_window_ytcfg:
+        try:
+            cfg_string = match_window_ytcfg.group(1)
+            # JSONとしてデコードを試みる
+            ytcfg = json.loads(cfg_string)
+            if ytcfg.get('INNERTUBE_API_KEY'):
+                print("DEBUG: API Key found via window['ytcfg'] pattern.")
+                return ytcfg
+        except json.JSONDecodeError:
+            pass
+            
+    # 3. var ytcfg = { ... }; パターン (従来の形式)
+    match_var_ytcfg = re.search(r'var ytcfg = ({.*?});', html_content, re.DOTALL)
+    if match_var_ytcfg:
+        try:
+            cfg_string = match_var_ytcfg.group(1)
+            # バックスラッシュなどを修正してデコードを試みる
+            cfg_string = cfg_string.replace('\\"', '"').replace("'", '"')
+            ytcfg = json.loads(cfg_string)
+            if ytcfg.get('INNERTUBE_API_KEY'):
+                print("DEBUG: API Key found via var ytcfg pattern.")
+                return ytcfg
+        except json.JSONDecodeError:
+            pass
+            
+    # 4. 失敗した場合
+    return {}
 
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            return create_json_response({'error': f'チャンネルが見つかりません。ID/ハンドル({channel_id})を確認してください。'}, 404)
-        return create_json_response({'error': f'外部URLの取得に失敗しました: {e}'}, 503)
-    except Exception as e:
-        return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
+# @app.route('/API/yt/channel/videos', methods=['GET']) 関数自体は前回の出力と変更ありません。
 
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
     """内部 API (/youtubei/v1/browse) を使用して、チャンネルの動画リストを返す。"""
     channel_id = request.args.get('c')
     if not channel_id:
-        return create_json_response({'error': 'Channel ID is missing'}, 400)
+        return create_json_response({'error': 'Channel ID is missing'}, 400) 
 
     if channel_id.startswith('@'):
         url = f"https://www.youtube.com/{channel_id}"
@@ -553,19 +534,23 @@ def channel_videos():
         response.raise_for_status()
         html_content = response.text
 
+        # 1. 修正された extract_ytcfg_data で APIキーとクライアント情報を取得
         ytcfg = extract_ytcfg_data(html_content)
         api_key = ytcfg.get('INNERTUBE_API_KEY')
         client_name = ytcfg.get('client', {}).get('clientName', 'WEB')
         client_version = ytcfg.get('client', {}).get('clientVersion', '2.20251025.09.00')
 
         if not api_key:
-            return create_json_response({'videos': [], 'error': '動画リスト APIキーが見つかりませんでした。'}, 500)
+            # APIキーが取得できない場合はエラーレスポンスを返す
+            return create_json_response({'videos': [], 'error': '動画リスト APIキーが見つかりませんでした。'}, 500) 
 
+        # 2. APIエンドポイントURLとペイロードを構築
         api_url = f"https://www.youtube.com/youtubei/v1/browse?key={api_key}"
         
+        # Invidiousと同じ原理で、動画タブの初期C-Tokenに相当する 'params' を設定
         payload = {
             "browseId": channel_id,
-            "params": "EgZ2aWRlb3M%3D", 
+            "params": "EgZ2aWRlb3M%3D", # Base64 for 'videos'
             "context": {
                 "client": {
                     "hl": "ja",
@@ -577,15 +562,17 @@ def channel_videos():
             }
         }
         
+        # 3. 内部APIを叩く (POSTリクエスト)
         api_response = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'})
         api_response.raise_for_status()
         api_data = api_response.json()
 
-        # JSONレスポンスから動画リストを抽出 (複雑なパスを統合)
+        # 4. JSONレスポンスから動画リストを抽出 (ロジックは変更なし)
         contents_path = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [{}])
         
         videos_tab_content = None
         for tab in contents_path:
+             # タブのタイトルで「Videos」「動画」「アップロード」のいずれかを探す
              if tab.get('tabRenderer', {}).get('title') in ['Videos', '動画', 'アップロード']:
                  videos_tab_content = tab['tabRenderer']['content'] \
                                          .get('sectionListRenderer', {}).get('contents', [{}])[0] \
@@ -594,7 +581,7 @@ def channel_videos():
                  break
         
         if not videos_tab_content:
-            return create_json_response({'videos': [], 'error': '動画リストのコンテンツ構造が見つかりませんでした。'}, 500)
+            return create_json_response({'videos': [], 'error': '動画リストのコンテンツ構造が見つかりませんでした。'}, 500) 
 
         video_renderers = videos_tab_content.get('items', [])
         videos = []
@@ -614,6 +601,7 @@ def channel_videos():
         return create_json_response({'videos': videos}, 200)
 
     except Exception as e:
+        print(f"ERROR: Internal API video list scraping failed: {type(e).__name__}: {e}")
         return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
 
 @app.route('/API/yt/playlist', methods=['GET'])
