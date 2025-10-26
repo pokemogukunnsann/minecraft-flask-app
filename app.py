@@ -629,26 +629,27 @@ def search_channels():
     
 
 
+
+
 # --- 検索 API 関数 ---
 
-@app.route('/API/yt/search', methods=['GET'])
+@app.route('/API/yt/search/videos', methods=['GET'])
 def search_videos():
-    """検索キーワード(q)を受け取り、YouTube内部検索APIを叩いて動画リストを返す。"""
+    """検索キーワード(q)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
     
     query_keyword = request.args.get('q')
-    if not query_keyword:
-        return create_json_response({'error': '検索キーワード (q) がありません'}, 400) 
+    continuation_token = request.args.get('continuation') # 🚨 継続トークンをチェック
 
-    api_url_path = "/youtubei/v1/search"
-    # APIキー等を取得するためにYouTubeのトップページにアクセス
-    url = "https://www.youtube.com/" 
-    
+    if not continuation_token and not query_keyword:
+        return create_json_response({'error': '検索キーワード (q) または継続トークンがありません'}, 400) 
+
+    # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
     api_key = None
-    # 🚨 動的バージョン設定を適用
     client_version_fallback = get_dynamic_client_version()
     client_name = 'WEB'
     visitor_data = None 
-
+    url = "https://www.youtube.com/" 
+    
     try:
         # 1. YouTubeトップページHTMLの取得
         headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
@@ -666,15 +667,12 @@ def search_videos():
             client_version = version_match.group(1) if version_match else client_version_fallback
             visitor_data = visitor_match.group(1) if visitor_match else None
             
-            # 抽出失敗時や、フォールバックバージョンが最新日付の場合に適用
             if client_version == client_version_fallback or not version_match: 
                  client_version = client_version_fallback
         else:
             return create_json_response({'videos': [], 'error': '検索 APIキーが見つかりませんでした。'}, 500) 
 
         # 3. 内部APIのペイロード構築
-        api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
-        
         context_data = {
             "client": {
                 "hl": "ja", 
@@ -691,12 +689,24 @@ def search_videos():
         if visitor_data:
              context_data['client']['visitorData'] = visitor_data
         
-        payload = {
-            "query": query_keyword, 
-            # 検索結果を「動画」タブにフィルタする params
-            "params": "",   # EgIQAQ%3D%3D を中に入れるとvideoのみの検索になります。
-            "context": context_data
-        }
+        # 🚨 検索の種類とAPI URLを分岐: 継続トークンがあれば /browse、なければ /search
+        if continuation_token:
+            # Continuation リクエスト
+            api_url_path = "/youtubei/v1/browse"
+            payload = {
+                "continuation": continuation_token, # 🚨 continuation をペイロードに設定
+                "context": context_data
+            }
+        else:
+            # 初期検索リクエスト
+            api_url_path = "/youtubei/v1/search"
+            payload = {
+                "query": query_keyword, 
+                "params": "EgIQAQ%3D%3D", # 動画フィルタ
+                "context": context_data
+            }
+
+        api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
         
         headers_api = {
             'Content-Type': 'application/json',
@@ -707,47 +717,62 @@ def search_videos():
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
         api_response.raise_for_status() 
         api_data = api_response.json()
-
-        # 5. APIデータから動画リストを抽出（検索API対応）
-        section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
+    
+        # 5. APIデータから動画リストを抽出（ページネーション対応）
         
+        if continuation_token:
+            # Continuation のレスポンスからアイテムを取得
+            # 継続リクエストのレスポンス構造は onResponseReceivedCommands の中にあります
+            continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
+            video_items_container = continuation_items
+        else:
+            # 初期検索のレスポンスからアイテムを取得
+            section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
+            
+            # 通常、最初の itemSectionRenderer の contents に動画リストがあります
+            if section_list_contents and 'itemSectionRenderer' in section_list_contents[0]:
+                video_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
+            else:
+                video_items_container = []
+
         videos = []
-        
-        for section in section_list_contents:
-            item_section = section.get('itemSectionRenderer', {})
-            for item in item_section.get('contents', []):
-                
-                renderer = item.get('videoRenderer') 
-                if not renderer: continue
+        next_continuation = None # 🚨 次の継続トークン
 
-                # 6. 動画レンダラーから必要な情報を抽出
-                video_id = renderer.get('videoId')
+        for item in video_items_container:
+            # 継続トークンを抽出
+            continuation_item = item.get('continuationItemRenderer')
+            if continuation_item:
+                next_continuation = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
+                continue # トークンは動画ではないのでスキップ
                 
-                # タイトル抽出
-                title_obj = renderer.get('title', {})
-                final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
-                
-                # 動画時間を取得し、タイトルに付加
-                duration = renderer.get('lengthText', {}).get('simpleText', '')
-                if duration:
-                     final_title = f"{final_title} ({duration})"
-                
-                # チャンネル名とIDも取得
-                owner_text = renderer.get('ownerText', {}).get('runs', [{}])[0]
-                channel_name = owner_text.get('text', 'チャンネル名不明')
-                channel_id_link = owner_text.get('navigationEndpoint', {}).get('browseEndpoint', {}).get('browseId')
-                
-                videos.append({
-                    'video_id': video_id,
-                    'title': final_title,
-                    'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
-                    'channel_name': channel_name, 
-                    'channel_id': channel_id_link,
-                    'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
-                    'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
-                })
+            # 動画レンダラー抽出
+            renderer = item.get('videoRenderer') 
+            if not renderer: continue
 
-        return create_json_response({'videos': videos}, 200)
+            # 動画情報の抽出
+            video_id = renderer.get('videoId')
+            title_obj = renderer.get('title', {})
+            final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
+            duration = renderer.get('lengthText', {}).get('simpleText', '')
+            if duration:
+                 final_title = f"{final_title} ({duration})"
+            
+            owner_text = renderer.get('ownerText', {}).get('runs', [{}])[0]
+            channel_name = owner_text.get('text', 'チャンネル名不明')
+            channel_id_link = owner_text.get('navigationEndpoint', {}).get('browseEndpoint', {}).get('browseId')
+            
+            videos.append({
+                'video_id': video_id,
+                'title': final_title,
+                'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
+                'channel_name': channel_name, 
+                'channel_id': channel_id_link,
+                'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
+                'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
+            })
+
+        # 🚨 戻り値に next_continuation を追加して返す
+        return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
 
     except requests.exceptions.HTTPError as e:
         error_message = f'検索 APIコールが失敗しました: {e.response.status_code}'
