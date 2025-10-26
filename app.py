@@ -93,32 +93,35 @@ DUMMY_CHANNEL = {
 # ------------------------------------------------
 def extract_ytcfg_data(html_content):
     """
-    HTMLからYouTube内部設定 (ytcfg) を抽出し、INNERTUBE_API_KEYおよびクライアント情報を取得する。
-    直接的なキー名での正規表現検索を最優先にする。
+    HTMLコンテンツからINNERTUBE_API_KEYとクライアント情報を抽出する。
+    デバッグ用に詳細なprintログを出力する。
     """
     import re
     import json
+    
+    # --- デバッグ情報: HTMLコンテンツのサイズ ---
+    print(f"DEBUG: HTML content size: {len(html_content)} bytes")
 
     # 1. 最優先: INNERTUBE_API_KEY, CLIENT_VERSION, CLIENT_NAMEを直接探す
-    # キーと値を個別に、最も緩い形式でキャプチャする（シングルクォートやバックスラッシュの心配を減らす）
     key_match = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"', html_content)
-    print(f"key:{key_match}")
     version_match = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9\.]+)"', html_content)
-    print(f"version:{version_match}")
     name_match = re.search(r'"INNERTUBE_CLIENT_NAME"\s*:\s*"([a-zA-Z0-9_]+)"', html_content)
-    print(f"name:{name_match}")
+
+    # --- デバッグ情報: 各マッチの結果 ---
+    print(f"DEBUG: key_match result: {bool(key_match)}")
+    print(f"DEBUG: version_match result: {bool(version_match)}")
+    print(f"DEBUG: name_match result: {bool(name_match)}")
+
 
     if key_match:
         api_key = key_match.group(1)
         client_version = version_match.group(1) if version_match else '2.20251026.09.00' 
         client_name = name_match.group(1) if name_match else 'WEB'
         
-
-        print(f"api_key:{api_key}")
-        print(f"client_version:{client_version}")
-        print(f"client_name:{client_name}")
-        print(f"DEBUG: API Key found via direct regex search: {api_key[:8]}...")
-
+        print(f"DEBUG: ✅ API Key found (Direct Regex): {api_key[:8]}...")
+        # 取得できたバージョン情報も出力
+        print(f"DEBUG: Extracted Version: {client_version}, Name: {client_name}")
+        
         return {
             'INNERTUBE_API_KEY': api_key,
             'client': {
@@ -126,21 +129,35 @@ def extract_ytcfg_data(html_content):
                 'clientVersion': client_version
             }
         }
+    
+    print("DEBUG: ❌ Direct Regex Search failed. Trying JSON block extraction.")
 
-    # 2. ytcfg.set( ... ) パターン (フォールバック)
-    match_ytcfg_set = re.search(r'ytcfg\.set\s*\(\s*(\{.+?\})\s*\);', html_content, re.DOTALL)
-    print(f"match_ytcfg_set:{match_ytcfg_set}")
-    if match_ytcfg_set:
-        try:
-            cfg_string = match_ytcfg_set.group(1)
+
+    # 2. JSONブロック全体を抜き出し、そこからキーを解析する（ytcfg JSONブロック）
+    match_ytcfg_json = re.search(r'\(function\(\)\{ytcfg\.set\((\{.*?\}))\);\}\)\(\);', html_content, re.DOTALL)
+    
+    # --- デバッグ情報: JSONブロックのマッチ結果 ---
+    print(f"DEBUG: ytcfg_json_match result: {bool(match_ytcfg_json)}")
+
+    if match_ytcfg_json:
+         try:
+            cfg_string = match_ytcfg_json.group(1)
             ytcfg = json.loads(cfg_string)
+            
+            # --- デバッグ情報: JSONブロック内のキーの有無 ---
+            print(f"DEBUG: INNERTUBE_API_KEY in JSON block: {bool(ytcfg.get('INNERTUBE_API_KEY'))}")
+            
             if ytcfg.get('INNERTUBE_API_KEY'):
-                print("DEBUG: API Key found via ytcfg.set pattern.")
+                print("DEBUG: ✅ API Key found (ytcfg JSON block).")
                 return ytcfg
-        except json.JSONDecodeError:
+            
+            print("DEBUG: ❌ ytcfg JSON block found, but INNERTUBE_API_KEY is missing inside.")
+         except json.JSONDecodeError as e:
+            print(f"DEBUG: ❌ ytcfg JSON block found, but JSON decode failed. Error: {e}")
             pass
-
+            
     # 3. 完全に失敗した場合
+    print("DEBUG: ⚠️ FATAL: All API Key extraction methods failed. Returning empty.")
     return {}
     
 
