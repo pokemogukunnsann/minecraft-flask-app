@@ -94,6 +94,62 @@ game_output_lock = threading.Lock()
 # ------------------------------------------------
 # 1. ヘルパー関数 (ユーティリティ / GitHub API)
 # ------------------------------------------------
+def extract_ytcfg_data(html_content):
+    """
+    HTMLからYouTube内部設定 (ytcfg) を抽出し、INNERTUBE_API_KEYを取得する。
+    複数のパターンを試し、堅牢性を向上させる。
+    """
+    import re
+    import json
+    
+    # 1. ytcfg.set( ... ) パターン (最も新しい形式)
+    # 正規表現: 'ytcfg.set' の後に続く括弧内のJSONオブジェクトをキャプチャ
+    # r'ytcfg\.set\s*\(\s*(\{.+?\})\s*\);' を使用することで、JSONの終わりまでをより正確にキャプチャ
+    match_ytcfg_set = re.search(r'ytcfg\.set\s*\(\s*(\{.+?\})\s*\);', html_content, re.DOTALL)
+    if match_ytcfg_set:
+        try:
+            cfg_string = match_ytcfg_set.group(1)
+            # JSONとしてデコードを試みる
+            ytcfg = json.loads(cfg_string)
+            if ytcfg.get('INNERTUBE_API_KEY'):
+                print("DEBUG: API Key found via ytcfg.set pattern.")
+                return ytcfg
+            
+        except json.JSONDecodeError as e:
+            # デコード失敗時は次のパターンへ
+            print(f"DEBUG: ytcfg.set JSON Decode Error: {e}")
+            pass
+
+    # 2. window["ytcfg"] = { ... } パターン (新しい形式のフォールバック)
+    match_window_ytcfg = re.search(r'window\["ytcfg"\]\s*=\s*(\{.+?\})\s*;', html_content, re.DOTALL)
+    if match_window_ytcfg:
+        try:
+            cfg_string = match_window_ytcfg.group(1)
+            # JSONとしてデコードを試みる
+            ytcfg = json.loads(cfg_string)
+            if ytcfg.get('INNERTUBE_API_KEY'):
+                print("DEBUG: API Key found via window['ytcfg'] pattern.")
+                return ytcfg
+        except json.JSONDecodeError:
+            pass
+            
+    # 3. var ytcfg = { ... }; パターン (従来の形式)
+    match_var_ytcfg = re.search(r'var ytcfg = ({.*?});', html_content, re.DOTALL)
+    if match_var_ytcfg:
+        try:
+            cfg_string = match_var_ytcfg.group(1)
+            # バックスラッシュなどを修正してデコードを試みる
+            cfg_string = cfg_string.replace('\\"', '"').replace("'", '"')
+            ytcfg = json.loads(cfg_string)
+            if ytcfg.get('INNERTUBE_API_KEY'):
+                print("DEBUG: API Key found via var ytcfg pattern.")
+                return ytcfg
+        except json.JSONDecodeError:
+            pass
+            
+    # 4. 失敗した場合
+    return {}
+    
 
 # GitHub設定とシークレットキーを起動時にチェックする関数
 def check_config():
