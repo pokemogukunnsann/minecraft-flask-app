@@ -651,7 +651,7 @@ def channel_videos():
 
     api_key = None
     # 最新のクライアントバージョンを設定
-    client_version_fallback = '2.20251027.06.45' 
+    client_version_fallback = get_dynamic_client_version() 
     client_name = 'WEB'
     visitor_data = None 
 
