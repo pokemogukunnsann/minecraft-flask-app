@@ -439,7 +439,7 @@ def register():
             return jsonify({
                 'success': True,
                 'message': 'アカウントが正常に作成されました！',
-                'redirect_url': 'https://minecraft-flask-app-gold.vercel.app/login' 
+                'redirect_url': '/login' 
             }), 201 
         else:
             return jsonify({
@@ -594,11 +594,16 @@ def channel_metadata():
 
 
 
+# ※ Flaskアプリ内で、requests, json, re, create_json_responseがインポートされていることを前提とします。
+
+# --- ヘルパー関数は使用せず、この関数内で直接キーを抽出します ---
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
-    """内部 API (/youtubei/v1/browse) を使用して、チャンネルの動画リストを返す。"""
+    """キーを直接抽出し、チャンネルの動画リストを取得する。"""
+    import re
+    import json
+    
     channel_id = request.args.get('c')
-    print(f"channel_id:{channel_id}")
     if not channel_id:
         return create_json_response({'error': 'Channel ID is missing'}, 400) 
 
@@ -607,33 +612,44 @@ def channel_videos():
     else:
         url = f"https://www.youtube.com/channel/{channel_id}"
 
+    api_key = None
+    client_version = '2.20251026.09.00' # デフォルト値
+    client_name = 'WEB' # デフォルト値
+
     try:
-        print(f"url:{url}")
+        # 1. チャンネルページHTMLの取得
         response = requests.get(url, timeout=10)
-        print(f'"response":"{response}"')
         response.raise_for_status()
         html_content = response.text
-        print(f'"html_content":"{html_content}"')
+        
+        # --- 2. INNERTUBE_API_KEY (大文字) を直接抽出する ---
+        # Grepの結果に基づき、最も確実なパターンを再利用
+        key_match = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"', html_content)
+        version_match = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9\.]+)"', html_content)
 
-        # 1. 修正された extract_ytcfg_data で APIキーとクライアント情報を取得
-        ytcfg = extract_ytcfg_data(html_content)
-        api_key = ytcfg.get('INNERTUBE_API_KEY')
-        client_name = ytcfg.get('client', {}).get('clientName', 'WEB')
-        client_version = ytcfg.get('client', {}).get('clientVersion', '2.20251025.09.00')
-        print(f'"ytcfg":"{ytcfg}","api_key":"{api_key}","client_name":"{client_name}","client_version":"{client_version}"')
+        # --- デバッグログ ---
+        print(f"DEBUG: 🔍 API_KEY Match (INNERTUBE_API_KEY): {bool(key_match)}")
+        print(f"DEBUG: 🔍 Version Match (INNERTUBE_CLIENT_VERSION): {bool(version_match)}")
 
-        if not api_key:
-            # APIキーが取得できない場合はエラーレスポンスを返す
+        if key_match:
+            api_key = key_match.group(1)
+            if version_match:
+                client_version = version_match.group(1)
+                
+            # --- 抽出成功ログ ---
+            print(f"DEBUG: ✅ API Key found: {api_key[:8]}...")
+            print(f"DEBUG: ⚙️ Client Info: Name={client_name}, Version={client_version}")
+        else:
+            # --- 抽出失敗ログ ---
+            print("DEBUG: ❌ INNERTUBE_API_KEY が見つかりませんでした。動画リスト APIコールスキップ。")
             return create_json_response({'videos': [], 'error': '動画リスト APIキーが見つかりませんでした。'}, 500) 
 
-        # 2. APIエンドポイントURLとペイロードを構築
+        # 3. 内部APIを叩く (抽出したキーを使用)
         api_url = f"https://www.youtube.com/youtubei/v1/browse?key={api_key}"
-        ptint(f'api_url:{api_url}')
         
-        # Invidiousと同じ原理で、動画タブの初期C-Tokenに相当する 'params' を設定
         payload = {
             "browseId": channel_id,
-            "params": "EgZ2aWRlb3M%3D", # Base64 for 'videos'
+            "params": "EgZ2aWRlb3M%3D", 
             "context": {
                 "client": {
                     "hl": "ja",
@@ -645,18 +661,19 @@ def channel_videos():
             }
         }
         
-        # 3. 内部APIを叩く (POSTリクエスト)
-        api_response = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'})
-        api_response.raise_for_status()
+        print(f"DEBUG: 🚀 Posting API request to {api_url.split('?')[0]}...")
+        api_response = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=10)
+        api_response.raise_for_status() # 4xx, 5xxエラーが発生したら例外を投げる
         api_data = api_response.json()
 
-        # 4. JSONレスポンスから動画リストを抽出 (ロジックは変更なし)
+        print(f"DEBUG: ✅ API call successful! Status: {api_response.status_code}")
+
+        # 4. APIデータから動画リストを抽出（ロジックは変更なし）
         contents_path = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [{}])
-        ptint(f'api_response:{api_response},api_data:{api_data},contents_path:{contents_path}')
+        # ... (動画リストを抽出する従来のロジック) ...
         
         videos_tab_content = None
         for tab in contents_path:
-             # タブのタイトルで「Videos」「動画」「アップロード」のいずれかを探す
              if tab.get('tabRenderer', {}).get('title') in ['Videos', '動画', 'アップロード']:
                  videos_tab_content = tab['tabRenderer']['content'] \
                                          .get('sectionListRenderer', {}).get('contents', [{}])[0] \
@@ -684,9 +701,16 @@ def channel_videos():
 
         return create_json_response({'videos': videos}, 200)
 
+    except requests.exceptions.HTTPError as e:
+        # APIコールが失敗した場合のログ
+        print(f"ERROR: API POST failed. Status: {e.response.status_code}. Response: {e.response.text[:200]}...")
+        return create_json_response({'error': f'動画リスト APIコールが失敗しました: {e.response.status_code}'}, 503)
     except Exception as e:
-        print(f"ERROR: Internal API video list scraping failed: {type(e).__name__}: {e}")
+        print(f"FATAL ERROR: Video list scraping failed: {type(e).__name__}: {e}")
         return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
+
+
+
 
 @app.route('/API/yt/playlist', methods=['GET'])
 def playlist_data():
