@@ -694,7 +694,7 @@ def search_videos():
         payload = {
             "query": query_keyword, 
             # 検索結果を「動画」タブにフィルタする params
-            "params": "EgIQAQ%3D%3D", 
+            "params": "",   # EgIQAQ%3D%3D を中に入れるとvideoのみの検索になります。
             "context": context_data
         }
         
