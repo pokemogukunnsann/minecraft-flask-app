@@ -935,38 +935,21 @@ def channel_metadata():
 # ※ 以下の create_json_response 関数は、Flaskアプリケーションで定義されていることを前提とします。
 # 例: def create_json_response(data, status_code): return app.response_class(response=json.dumps(data, ensure_ascii=False), status=status_code, mimetype='application/json')
 
-import requests
-import json
-import re
-from flask import request, jsonify
-import datetime
-
-# --- 補助関数 (app.pyに定義済みを前提) ---
-
-def create_json_response(data, status):
-    return jsonify(data), status
-
-def get_dynamic_client_version():
-    """現在の日付に基づいた YouTube クライアントバージョンを生成する"""
-    now = datetime.datetime.now()
-    date_str = now.strftime('%Y%m%d')
-    return f"2.{date_str}.06.45"
-
-# --- チャンネル動画リスト取得 API 関数 ---
+# ※ app.py内の既存の get_dynamic_client_version 関数と create_json_response 関数は定義済みを前提とします。
 
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
     """チャンネルID(c)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
     
     channel_id = request.args.get('c')
-    continuation_token = request.args.get('continuation') # 🚨 継続トークンをチェック
+    continuation_token = request.args.get('continuation')
 
     if not continuation_token and not channel_id:
         return create_json_response({'error': 'チャンネルID (c) または継続トークンがありません'}, 400) 
 
     # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
     api_key = None
-    client_version_fallback = get_dynamic_client_version() # 🚨 動的バージョン設定
+    client_version_fallback = get_dynamic_client_version()
     client_name = 'WEB'
     visitor_data = None 
     
@@ -976,7 +959,6 @@ def channel_videos():
     try:
         # 1. YouTubeチャンネル動画タブのHTMLを取得 (APIキーなどを取得)
         headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
-        # 継続リクエストの場合はHTML取得はスキップ可能だが、VisitorData等の再取得のため初期リクエストに合わせる
         response = requests.get(url, headers=headers_html, timeout=10)
         response.raise_for_status()
         html_content = response.text
@@ -1013,51 +995,94 @@ def channel_videos():
         if visitor_data:
              context_data['client']['visitorData'] = visitor_data
         
-        # 🚨 検索の種類とAPI URLを分岐: 継続トークンがあれば /browse、なければ /browse
+        # 🚨 検索の種類とAPI URLを分岐
         api_url_path = "/youtubei/v1/browse"
         api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
 
         if continuation_token:
             # Continuation リクエスト
             payload = {
-                "continuation": continuation_token, # 🚨 continuation をペイロードに設定
+                "continuation": continuation_token,
                 "context": context_data
             }
         else:
-            # 初期リクエスト (動画タブの browseId を抽出)
-            # チャンネルページHTMLから動画タブに対応するトークンを抽出する
-            token_match = re.search(r'"browseId":"UC.+?"', html_content)
-            if not token_match:
-                return create_json_response({'error': '初期動画リストのトークンが見つかりませんでした。'}, 500) 
-
-            # 動画タブは "FE_FOR_CHANNEL_VIDEOS" に対応するトークンを探すのが最も確実だが、
-            # 簡略化のため、ここではチャネルIDをそのまま利用
-            # 🚨 実際の動画タブのデータを読み込むためのトークン/IDをHTMLから探すロジックが必要だが、
-            # 以前のバージョンでブラウズIDを取得するロジックを簡略化して channelId を使っていた場合、
-            # ここでは channelId をトークンとして使うか、継続トークンと同じペイロード形式を使うかの工夫が必要。
-            # 今回は、継続トークンがない場合は **channelId を使って最初の動画リストを読み込む**構造を維持する
+            # 🚨 初期リクエスト: HTMLから最初の継続トークンを抽出するロジックをシンプルに再構成
             
-            # YouTubeの仕様変更により、動画タブのコンテンツはトークンでのみ取得できるようになったため、
-            # HTMLから動画タブのトークン (タブのURLに付随するデータ) を抽出する必要があります。
-            # ここでは、簡略化のため、**動画タブのトークン**をHTMLから抽出します。
+            # HTML内のすべての継続トークンから最初のものを見つける（動画リストの最初のバッチをロードするため）
+            token_match_fallback = re.search(r'"continuationEndpoint":\{"continuationCommand":\{"token":"([^"]+?)"\}', html_content)
             
-            # 動画タブのトークン (タブのURLに付随するデータ) を抽出
-            token_match_videos = re.search(r'{"tabRenderer":{"endpoint":{"commandMetadata":{"webCommandMetadata":{"url":"/channel/.+?/videos"}},"browseEndpoint":{"browseId":".+?","params":"([^"]+?)"}},"title":"動画"', html_content)
-            
-            if not token_match_videos:
-                # チャンネル動画ページ全体から最初のセクションのトークンを取得する（フォールバック）
-                token_match_fallback = re.search(r'"continuationEndpoint":\{"continuationCommand":\{"token":"([^"]+?)"\}', html_content)
-                if token_match_fallback:
-                    first_continuation = token_match_fallback.group(1)
-                    # 初期リクエストも継続リクエストと同じペイロード構造で送る
-                    payload = {
-                        "continuation": first_continuation,
-                        "context": context_data
-                    }
-                else:
-                    return create_json_response({'error': '初期動画リストのトークン/継続トークンが見つかりませんでした。'}, 500) 
+            if token_match_fallback:
+                first_continuation = token_match_fallback.group(1)
+                # 初期リクエストも継続リクエストと同じペイロード構造で送る
+                payload = {
+                    "continuation": first_continuation,
+                    "context": context_data
+                }
             else:
-                # 動画タブのParamsを使う場合 (channel_videosの場合は
+                # 🚨 これがインデントエラーの原因だった可能性あり。
+                # 確実にリターン文をインデントブロック内に配置
+                return create_json_response({'error': '初期動画リストのロード用トークンが見つかりませんでした。'}, 500) 
+
+        headers_api = {
+            'Content-Type': 'application/json',
+            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
+        }
+        
+        # 4. 内部APIを叩く
+        api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
+        api_response.raise_for_status() 
+        api_data = api_response.json()
+    
+        # 5. APIデータから動画リストを抽出（ページネーション対応）
+        
+        # 継続リクエストも初期リクエストも、レスポンス構造は onResponseReceivedCommands の中にあります
+        continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
+        video_items_container = continuation_items
+        
+        videos = []
+        next_continuation = None
+
+        for item in video_items_container:
+            # 継続トークンを抽出
+            continuation_item = item.get('continuationItemRenderer')
+            if continuation_item:
+                next_continuation = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
+                continue
+                
+            # 動画レンダラー抽出
+            renderer = item.get('gridVideoRenderer') # チャンネルの動画リストは 'gridVideoRenderer' であることが多い
+            if not renderer: continue
+
+            # 動画情報の抽出
+            video_id = renderer.get('videoId')
+            title_obj = renderer.get('title', {})
+            final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
+            duration = renderer.get('thumbnailOverlay', {}).get('thumbnailOverlayTimeStatusRenderer', {}).get('text', {}).get('simpleText', '')
+            if duration:
+                 final_title = f"{final_title} ({duration})"
+            
+            # チャンネル情報は不要（既にチャンネルページのため）
+            channel_name = channel_id
+            channel_id_link = channel_id
+            
+            videos.append({
+                'video_id': video_id,
+                'title': final_title,
+                'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
+                'channel_name': channel_name, 
+                'channel_id': channel_id_link,
+                'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
+                'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
+            })
+
+        # 戻り値に next_continuation を追加して返す
+        return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
+
+    except requests.exceptions.HTTPError as e:
+        error_message = f'APIコールが失敗しました: {e.response.status_code}'
+        return create_json_response({'error': error_message}, 503)
+    except Exception as e:
+        return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
 
 
 
