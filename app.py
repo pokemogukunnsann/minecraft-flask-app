@@ -25,7 +25,9 @@ from flask_cors import CORS
 # .envファイルをロード
 load_dotenv()
 
-app = Flask(__name__)
+
+pokemogukunns = Flask(__name__)
+app = pokemogukunns
 CORS(app)
 
 # --- Flask設定 ---
@@ -492,7 +494,7 @@ def home_videos():
 
 # ※ create_json_response, get_dynamic_client_version, request, requests, json, re は定義済みとします。
 
-@app.route('/API/yt/search', methods=['GET'])
+@pokemogukunns.route('/API/yt/search', methods=['GET'])
 def search_videos():
     """検索キーワード(q)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。
     type=dataが指定された場合、生のAPIレスポンスデータを返す。"""
