@@ -518,6 +518,7 @@ def search_videos():
     
     query_keyword = request.args.get('q')
     page_number = request.args.get('page')
+    pokemogu = request.args.get('type')
     
     # ページ番号を整数として取得、デフォルトは1ページ目
     try:
@@ -527,6 +528,8 @@ def search_videos():
     
     if not query_keyword:
         return create_json_response({'error': '検索キーワード (q) がありません'}, 400) 
+
+    
 
     # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
     api_key = None
@@ -635,6 +638,9 @@ def search_videos():
         
         api_data_text = api_response.text
         api_data = json.loads(api_data_text)
+
+        if pokemogu:
+        return create_json_response(f"{api_data}", 200) 
         
         # 🚨 デバッグ処理 1: 生データから継続トークン（token）を抽出して出力
         token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}', api_data_text)
