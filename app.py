@@ -500,7 +500,10 @@ def home_videos():
 # ※ create_json_response と get_dynamic_client_version は
 #    app.py の先頭で既に定義済みであることを前提とします。
 
-@app.route('/API/yt/search', methods=['GET']) # 🚨 ルーティングを /API/yt/search に修正
+# ※ create_json_response と get_dynamic_client_version は
+#    app.py の先頭で既に定義済みであることを前提とします。
+
+@app.route('/API/yt/search', methods=['GET'])
 def search_videos():
     """検索キーワード(q)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
     
@@ -512,7 +515,6 @@ def search_videos():
 
     # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
     api_key = None
-    # 補助関数を利用
     client_version_fallback = get_dynamic_client_version()
     client_name = 'WEB'
     visitor_data = None 
@@ -584,20 +586,20 @@ def search_videos():
         # 4. 内部APIを叩く
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
         api_response.raise_for_status() 
-        api_data = api_response.json()
-
-        print(f"api_dataの値:{api_data}")
-    
-        # 5. APIデータから動画リストを抽出（ページネーション対応）
         
-token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}', api_data_text)
+        # APIレスポンスをテキストとして取得し、その後JSONに変換
+        api_data_text = api_response.text
+        api_data = json.loads(api_data_text)
+        
+        # 🚨 デバッグ処理 1: 生データから継続トークン（token）を抽出して出力
+        token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}', api_data_text)
         
         if token_debug_matches:
             print(f"DEBUG: ✅ APIレスポンス内で継続トークンを発見しました: {token_debug_matches[0]} (他{len(token_debug_matches)-1}件)")
         else:
             print("DEBUG: ⚠️ APIレスポンス内で継続トークン（token）は見つかりませんでした。")
-
-
+        
+        
         # 5. APIデータから動画リストを抽出（ページネーション対応）
         
         if continuation_token:
@@ -614,13 +616,15 @@ token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}'
                 video_items_container = []
 
         videos = []
-        next_continuation = None
+        next_continuation = None # 次の継続トークン
 
         for item in video_items_container:
-            # 継続トークンを抽出
+            # 継続トークンを抽出（ロジック側での抽出）
             continuation_item = item.get('continuationItemRenderer')
             if continuation_item:
-                next_continuation = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
+                extracted_token = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
+                next_continuation = extracted_token
+                print(f"DEBUG: 🚀 ロジックで次の継続トークンを抽出成功: {extracted_token}")
                 continue
                 
             # 動画レンダラー抽出
@@ -649,6 +653,11 @@ token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}'
                 'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
             })
 
+        # 🚨 next_continuation が null の理由をログ出力
+        if next_continuation is None:
+            print("DEBUG: 🛑 最終的に next_continuation は null です。次のページは存在しないか、抽出に失敗しています。")
+
+
         # 戻り値に next_continuation を追加して返す
         return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
 
@@ -657,6 +666,15 @@ token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}'
         return create_json_response({'error': error_message}, 503)
     except Exception as e:
         return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
+
+
+
+
+
+
+
+
+
 
 
 
