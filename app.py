@@ -506,6 +506,9 @@ def home_videos():
 # ※ create_json_response と get_dynamic_client_version は
 #    app.py の先頭で既に定義済みであることを前提とします。
 
+# ※ create_json_response と get_dynamic_client_version は
+#    app.py の先頭で既に定義済みであることを前提とします。
+
 @app.route('/API/yt/search', methods=['GET'])
 def search_videos():
     """検索キーワード(q)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
@@ -575,7 +578,7 @@ def search_videos():
             api_url_path = "/youtubei/v1/search"
             payload = {
                 "query": query_keyword, 
-                "params": "EgIQAQ%3D%3D", # 動画フィルタ
+                # 🚨 動画フィルタ "params": "EgIQAQ%3D%3D" を削除！
                 "context": context_data
             }
 
@@ -640,7 +643,7 @@ def search_videos():
                 print(f"DEBUG: 🚀 ロジックで次の継続トークンを抽出成功: {extracted_token}")
                 continue
                 
-            # 動画レンダラー抽出
+            # 動画レンダラーのみを抽出する（チャンネル、プレイリストなどを除外）
             renderer = item.get('videoRenderer') 
             if not renderer: continue
 
@@ -665,6 +668,7 @@ def search_videos():
                 'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
                 'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
             })
+
 
         # 🚨 next_continuation が null の理由をログ出力
         if next_continuation is None:
