@@ -528,7 +528,7 @@ def get_home_videos():
         if visitor_data:
              context_data['client']['visitorData'] = visitor_data
 
-        api_url_path = "/youtubei/v1/browse" # ホームフィードは /browse を使用
+        api_url_path = "/youtubei/v1/browse" 
         
         if continuation_token:
             # 継続リクエストのペイロード
@@ -539,8 +539,10 @@ def get_home_videos():
             print(f"DEBUG: ⚠️ Raw Continuation Token: {continuation_token}")
         else:
             # 初期リクエストのペイロード
+            else:
+            # 🚨 テスト用修正: browseId を トレンド（急上昇）に一時的に変更
             payload = {
-                "browseId": "FEwhat_to_watch", # ホームフィードの固定ID
+                "browseId": "FEtrending", # 👈 "FEwhat_to_watch" から "FEtrending" に変更
                 "context": context_data
             }
 
