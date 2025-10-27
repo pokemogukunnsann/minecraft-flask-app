@@ -576,6 +576,8 @@ def search_videos():
         api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
         print(" ⬇️ APIにしたYoutubeリンク　⬇️ ")
         print(f"{api_url}")
+        print(" ⬇️ curlコマンド ⬇️ ")
+        print(f"cuel -v -L {api_url} -H {payload} -H")
         
         headers_api = {
             'Content-Type': 'application/json',
@@ -584,6 +586,8 @@ def search_videos():
         
         # 4. 内部APIを叩く
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
+        print(" ⬇️ curlコマンド ⬇️ ")
+        print(f"cuel -v -L {api_url} -H {payload} -H {headers_api}")
         api_response.raise_for_status() 
         api_data = api_response.json()
         
