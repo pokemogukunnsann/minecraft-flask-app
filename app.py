@@ -626,6 +626,8 @@ def search_videos():
                 # 🚨 next_continuation の値を確定したら、printして次の処理に進む
                 next_continuation = extracted_token
                 print(f"DEBUG: 🚀 ロジックで次の継続トークンを抽出成功: {extracted_token}")
+                print("URLを提供します。")
+                print(f"/API/yt/search?q={query_keyword}&continuation={extracted_token}")
                 continue
                 
             # 動画レンダラーのみを抽出
