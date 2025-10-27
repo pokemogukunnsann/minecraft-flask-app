@@ -539,7 +539,6 @@ def get_home_videos():
             print(f"DEBUG: ⚠️ Raw Continuation Token: {continuation_token}")
         else:
             # 初期リクエストのペイロード
-            else:
             # 🚨 テスト用修正: browseId を トレンド（急上昇）に一時的に変更
             payload = {
                 "browseId": "FEtrending", # 👈 "FEwhat_to_watch" から "FEtrending" に変更
