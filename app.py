@@ -497,7 +497,161 @@ def home_videos():
 
 
 
-# --- 補助関数 ---
+# ※ create_json_response と get_dynamic_client_version は
+#    app.py の先頭で既に定義済みであることを前提とします。
+
+@app.route('/API/yt/search', methods=['GET']) # 🚨 ルーティングを /API/yt/search に修正
+def search_videos():
+    """検索キーワード(q)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
+    
+    query_keyword = request.args.get('q')
+    continuation_token = request.args.get('continuation')
+
+    if not continuation_token and not query_keyword:
+        return create_json_response({'error': '検索キーワード (q) または継続トークンがありません'}, 400) 
+
+    # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
+    api_key = None
+    # 補助関数を利用
+    client_version_fallback = get_dynamic_client_version()
+    client_name = 'WEB'
+    visitor_data = None 
+    url = "https://www.youtube.com/" 
+    
+    try:
+        # 1. YouTubeトップページHTMLの取得
+        headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
+        response = requests.get(url, headers=headers_html, timeout=10)
+        response.raise_for_status()
+        html_content = response.text
+        
+        # 2. APIキー、バージョン、VisitorDataを抽出
+        key_match = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"', html_content)
+        version_match = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9\.]+)"', html_content)
+        visitor_match = re.search(r'"VISITOR_DATA"\s*:\s*"([a-zA-Z0-9%\-_=]+)"', html_content)
+
+        if key_match:
+            api_key = key_match.group(1)
+            client_version = version_match.group(1) if version_match else client_version_fallback
+            visitor_data = visitor_match.group(1) if visitor_match else None
+            
+            if client_version == client_version_fallback or not version_match: 
+                 client_version = client_version_fallback
+        else:
+            return create_json_response({'videos': [], 'error': '検索 APIキーが見つかりませんでした。'}, 500) 
+
+        # 3. 内部APIのペイロード構築
+        context_data = {
+            "client": {
+                "hl": "ja", 
+                "gl": "JP",
+                "clientName": client_name,
+                "clientVersion": client_version,
+                "platform": "DESKTOP",
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36",
+            },
+            "user": {"lockedSafetyMode": False},
+            "request": {"useSsl": True}
+        }
+        
+        if visitor_data:
+             context_data['client']['visitorData'] = visitor_data
+        
+        # 検索の種類とAPI URLを分岐: 継続トークンがあれば /browse、なければ /search
+        if continuation_token:
+            # Continuation リクエストは /browse エンドポイントを使用
+            api_url_path = "/youtubei/v1/browse"
+            payload = {
+                "continuation": continuation_token,
+                "context": context_data
+            }
+        else:
+            # 初期検索リクエストは /search エンドポイントを使用
+            api_url_path = "/youtubei/v1/search"
+            payload = {
+                "query": query_keyword, 
+                "params": "EgIQAQ%3D%3D", # 動画フィルタ
+                "context": context_data
+            }
+
+        api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
+        
+        headers_api = {
+            'Content-Type': 'application/json',
+            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
+        }
+        
+        # 4. 内部APIを叩く
+        api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
+        api_response.raise_for_status() 
+        api_data = api_response.json()
+    
+        # 5. APIデータから動画リストを抽出（ページネーション対応）
+        
+        if continuation_token:
+            # Continuation のレスポンスからアイテムを取得
+            continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
+            video_items_container = continuation_items
+        else:
+            # 初期検索のレスポンスからアイテムを取得
+            section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
+            
+            if section_list_contents and 'itemSectionRenderer' in section_list_contents[0]:
+                video_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
+            else:
+                video_items_container = []
+
+        videos = []
+        next_continuation = None
+
+        for item in video_items_container:
+            # 継続トークンを抽出
+            continuation_item = item.get('continuationItemRenderer')
+            if continuation_item:
+                next_continuation = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
+                continue
+                
+            # 動画レンダラー抽出
+            renderer = item.get('videoRenderer') 
+            if not renderer: continue
+
+            # 動画情報の抽出
+            video_id = renderer.get('videoId')
+            title_obj = renderer.get('title', {})
+            final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
+            duration = renderer.get('lengthText', {}).get('simpleText', '')
+            if duration:
+                 final_title = f"{final_title} ({duration})"
+            
+            owner_text = renderer.get('ownerText', {}).get('runs', [{}])[0]
+            channel_name = owner_text.get('text', 'チャンネル名不明')
+            channel_id_link = owner_text.get('navigationEndpoint', {}).get('browseEndpoint', {}).get('browseId')
+            
+            videos.append({
+                'video_id': video_id,
+                'title': final_title,
+                'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
+                'channel_name': channel_name, 
+                'channel_id': channel_id_link,
+                'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
+                'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
+            })
+
+        # 戻り値に next_continuation を追加して返す
+        return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
+
+    except requests.exceptions.HTTPError as e:
+        error_message = f'検索 APIコールが失敗しました: {e.response.status_code}'
+        return create_json_response({'error': error_message}, 503)
+    except Exception as e:
+        return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
+
+
+
+
+
+
+
 
 
 # --- チャンネル検索 API 関数 ---
