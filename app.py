@@ -550,8 +550,42 @@ def get_home_videos():
             'Content-Type': 'application/json',
             'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
         }
+
+
+# 3. 内部APIを叩く前にデバッグ用のcurlコマンドを出力
+
+        # 1. ペイロード辞書を整形せずにJSON文字列に変換
+        json_payload = json.dumps(payload, ensure_ascii=False)
+
+        # 2. ヘッダーを curl の -H 形式の文字列リストに変換
+        header_parts = []
+        for key, value in headers_api.items():
+            header_parts.append(f'-H "{key}: {value}"')
+
+        # 3. コマンド全体をリストとして構築し、スペースで結合
+        command_parts = [
+            "curl", 
+            "-v", 
+            "-L", 
+            "-X", 
+            "POST",
+            f'"{api_url}"'  # URLはダブルクォートで囲む
+        ]
+        command_parts.extend(header_parts)
+        command_parts.append(f"-d '{json_payload}'")
+
+        final_curl_command = " ".join(command_parts)
+        
+        # ユーザー情報に基づき、確定した値を出力します。
+        print(f"DEBUG: ⚠️ Home API CURL Command (for manual testing):{final_curl_command}")
+
+        # 4. 内部APIを叩く (requests.postの部分)
+        api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
+        # ... (以降、通常通り)
+
         
         # 3. 内部APIを叩く
+        
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
         api_response.raise_for_status() 
         api_data = api_response.json()
