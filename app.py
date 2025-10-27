@@ -480,10 +480,150 @@ def register():
 # 3. YouTube風 API ルート (/API/yt/*)
 # ------------------------------------------------
 
+# ※ Flask, requests, json, re, create_json_response, get_dynamic_client_version の定義済みを前提とします。
+
 @app.route('/API/yt/videos/home', methods=['GET'])
-def home_videos():
-    videos = [create_dummy_video(i) for i in range(1, 21)]
-    return jsonify({'videos': videos}), 200
+def get_home_videos():
+    """YouTubeのホームフィード（トップページ）の動画リストを取得する。
+    継続トークン（continuation）によるページングに対応。
+    """
+    
+    continuation_token = request.args.get('continuation')
+    request_type = request.args.get('type') 
+
+    # 1. 初期設定 (検索APIとほぼ同じ)
+    api_key = None
+    client_version_fallback = get_dynamic_client_version()
+    
+    try:
+        # 1-2. APIキー、バージョン、VisitorDataの抽出（search_videosから流用）
+        headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
+        response = requests.get("https://www.youtube.com/", headers=headers_html, timeout=10)
+        response.raise_for_status()
+        html_content = response.text
+        
+        # (APIキー、バージョン、VisitorDataの抽出ロジック...省略)
+        key_match = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"', html_content)
+        version_match = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9\.]+)"', html_content)
+        visitor_match = re.search(r'"VISITOR_DATA"\s*:\s*"([a-zA-Z0-9%\-_=]+)"', html_content)
+
+        if key_match:
+            api_key = key_match.group(1)
+            client_version = version_match.group(1) if version_match else client_version_fallback
+            visitor_data = visitor_match.group(1) if visitor_match else None
+        else:
+            return create_json_response({'videos': [], 'error': 'ホームフィード APIキーが見つかりませんでした。'}, 500) 
+
+        # 2. 内部APIのペイロード構築
+        context_data = {
+            "client": {
+                "hl": "ja", 
+                "gl": "JP",
+                "clientName": 'WEB',
+                "clientVersion": client_version,
+                "platform": "DESKTOP",
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36",
+            },
+        }
+        if visitor_data:
+             context_data['client']['visitorData'] = visitor_data
+
+        api_url_path = "/youtubei/v1/browse" # ホームフィードは /browse を使用
+        
+        if continuation_token:
+            # 継続リクエストのペイロード
+            payload = {
+                "continuation": continuation_token,
+                "context": context_data
+            }
+            print(f"DEBUG: ⚠️ Raw Continuation Token: {continuation_token}")
+        else:
+            # 初期リクエストのペイロード
+            payload = {
+                "browseId": "FEdefault", # ホームフィードの固定ID
+                "context": context_data
+            }
+
+        api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
+        
+        headers_api = {
+            'Content-Type': 'application/json',
+            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
+        }
+        
+        # 3. 内部APIを叩く
+        api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
+        api_response.raise_for_status() 
+        api_data = api_response.json()
+        
+        # type=data の場合は生データを返す
+        if request_type == 'data':
+            return create_json_response(api_data, 200)
+
+        
+        # 4. APIデータから動画リストと継続トークンを抽出
+        videos = []
+        next_continuation = None 
+        
+        # ホームフィードの抽出パスは検索と異なるため、新しいパスを設定
+        if continuation_token:
+             # Continuation のレスポンスからアイテムを取得
+            all_items = api_data.get('onResponseReceivedActions', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
+        else:
+            # 初期検索のレスポンスからアイテムを取得
+            # twoColumnBrowseResultsRenderer -> tabs[0] -> tabRenderer -> content -> richGridRenderer -> contents
+            grid_renderer = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [{}])[0].get('tabRenderer', {}).get('content', {}).get('richGridRenderer', {})
+            all_items = grid_renderer.get('contents', [])
+            
+        print(f"DEBUG: 🎯 all_items (動画とトークン候補) のアイテム数: {len(all_items)}")
+
+        # 5. 動画データと継続トークンの抽出
+        for item in all_items: 
+            # 継続トークンを抽出 (ホームフィードのトークンはリストの最後のアイテムに格納されています)
+            continuation_item = item.get('continuationItemRenderer')
+            if continuation_item:
+                extracted_token = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
+                next_continuation = extracted_token
+                print(f"DEBUG: 🚀 ロジックで次の継続トークンを抽出成功: {extracted_token}")
+                continue
+                
+            # 動画レンダラーのみを抽出
+            # ホームフィードの動画は richItemRenderer に包まれていることが多い
+            renderer_container = item.get('richItemRenderer', {})
+            renderer = renderer_container.get('content', {}).get('videoRenderer')
+            
+            if not renderer: 
+                continue
+
+            # 動画情報の抽出 (search_videosから流用)
+            video_id = renderer.get('videoId')
+            final_title = renderer.get('title', {}).get('runs', [{}])[0].get('text', 'タイトル不明')
+            duration = renderer.get('lengthText', {}).get('simpleText', '')
+            if duration:
+                 final_title = f"{final_title} ({duration})"
+            
+            owner_text = renderer.get('ownerText', {}).get('runs', [{}])[0]
+            channel_name = owner_text.get('text', 'チャンネル名不明')
+            
+            videos.append({
+                'video_id': video_id,
+                'title': final_title,
+                'channel_name': channel_name, 
+                'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
+                'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
+            })
+
+        # 6. 結果の返却
+        if next_continuation is None:
+            print("DEBUG: 🛑 next_continuation は null です。次のページは存在しないか、抽出に失敗しています。")
+
+        return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
+
+    except requests.exceptions.HTTPError as e:
+        error_message = f'ホームフィード APIコールが失敗しました: {e.response.status_code}'
+        return create_json_response({'error': error_message}, 503)
+    except Exception as e:
+        return create_json_response({'error': f'ホームフィードの取得に失敗しました: {type(e).__name__}'}, 500)
 
 
 
