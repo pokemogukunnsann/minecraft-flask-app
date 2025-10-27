@@ -1022,6 +1022,14 @@ def video_iframe(video_id):
         print(f"ERROR: Config or network error: {e}")
         return jsonify({'iframe_url': fallback_url}), 200
 
+
+
+
+
+
+
+
+
 @app.route('/API/yt/channel', methods=['GET'])
 def channel_metadata():
     """チャンネルメタデータを返すAPI。文字化け対策に create_json_response を使用。"""
