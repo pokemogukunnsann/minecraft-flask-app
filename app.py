@@ -585,6 +585,8 @@ def search_videos():
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
         api_response.raise_for_status() 
         api_data = api_response.json()
+
+        prin(f"api_dataの値:{api_data}")
     
         # 5. APIデータから動画リストを抽出（ページネーション対応）
         
