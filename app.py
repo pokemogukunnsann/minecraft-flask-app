@@ -596,37 +596,44 @@ def get_home_videos():
 
         
         # 4. APIデータから動画リストと継続トークンを抽出
+        # ... (中略: APIコール後の api_data 取得まで)
+
+        # 4. APIデータから動画リストと継続トークンを抽出
         videos = []
         next_continuation = None 
         
-        # ホームフィードの抽出パスは検索と異なるため、新しいパスを設定
+        # 4-1. 動画アイテムのリストのパス（確定）
         if continuation_token:
              # Continuation のレスポンスからアイテムを取得
             all_items = api_data.get('onResponseReceivedActions', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
         else:
-            # 初期検索のレスポンスからアイテムを取得
-            # twoColumnBrowseResultsRenderer -> tabs[0] -> tabRenderer -> content -> richGridRenderer -> contents
+            # 初期リクエストのレスポンスからアイテムを取得
             grid_renderer = api_data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [{}])[0].get('tabRenderer', {}).get('content', {}).get('richGridRenderer', {})
-            all_items = grid_renderer.get('contents', [])
+            all_items = grid_renderer.get('contents', []) # 👈 ここに richSectionRenderer, richItemRenderer, continuationItemRenderer が含まれる
             
         print(f"DEBUG: 🎯 all_items (動画とトークン候補) のアイテム数: {len(all_items)}")
 
         # 5. 動画データと継続トークンの抽出
         for item in all_items: 
-            # 継続トークンを抽出 (ホームフィードのトークンはリストの最後のアイテムに格納されています)
+            # 継続トークンを抽出 (リストの最後のアイテムに格納される)
             continuation_item = item.get('continuationItemRenderer')
             if continuation_item:
                 extracted_token = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
                 next_continuation = extracted_token
-                print(f"DEBUG: 🚀 ロジックで次の継続トークンを抽出成功: {extracted_token}")
+                print(f"DEBUG: 🚀 次の継続トークンを抽出成功: {extracted_token}")
                 continue
                 
-            # 動画レンダラーのみを抽出
-            # ホームフィードの動画は richItemRenderer に包まれていることが多い
+            # 動画コンテナ (richItemRenderer) を抽出
             renderer_container = item.get('richItemRenderer', {})
+            if not renderer_container:
+                # richSectionRenderer (メッセージなど) はスキップ
+                continue 
+            
+            # 動画レンダラーを取得
             renderer = renderer_container.get('content', {}).get('videoRenderer')
             
             if not renderer: 
+                # 動画以外のアイテム (ショート動画、広告など) はスキップ
                 continue
 
             # 動画情報の抽出 (search_videosから流用)
@@ -648,6 +655,7 @@ def get_home_videos():
             })
 
         # 6. 結果の返却
+        print(f"DEBUG: 🎬 抽出された動画数: {len(videos)}")
         if next_continuation is None:
             print("DEBUG: 🛑 next_continuation は null です。次のページは存在しないか、抽出に失敗しています。")
 
