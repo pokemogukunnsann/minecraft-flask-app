@@ -540,7 +540,7 @@ def get_home_videos():
         else:
             # 初期リクエストのペイロード
             payload = {
-                "browseId": "FEdefault", # ホームフィードの固定ID
+                "browseId": "FEwhat_to_watch", # ホームフィードの固定ID
                 "context": context_data
             }
 
