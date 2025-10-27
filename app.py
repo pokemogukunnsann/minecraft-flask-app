@@ -503,6 +503,9 @@ def home_videos():
 # ※ create_json_response と get_dynamic_client_version は
 #    app.py の先頭で既に定義済みであることを前提とします。
 
+# ※ create_json_response と get_dynamic_client_version は
+#    app.py の先頭で既に定義済みであることを前提とします。
+
 @app.route('/API/yt/search', methods=['GET'])
 def search_videos():
     """検索キーワード(q)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
@@ -607,23 +610,24 @@ def search_videos():
             continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
             video_items_container = continuation_items
         else:
-    # 初期検索のレスポンスからアイテムを取得
-        section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
-    
-        video_items_container = []
-    
-    # 🚨 デバッグコード: section_list_contents の構造を確認
-        if section_list_contents:
-           print(f"DEBUG: 📦 sectionListRenderer.contents のアイテム数: {len(section_list_contents)}")
-    
-        if section_list_contents and 'itemSectionRenderer' in section_list_contents[0]:
-            video_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
-        
-        # 🚨 デバッグコード: video_items_container のアイテム数を確認
-            print(f"DEBUG: 🎯 video_items_container (動画候補) のアイテム数: {len(video_items_container)}")
-        else:
+            # 初期検索のレスポンスからアイテムを取得
+            section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
+            
             video_items_container = []
-
+            
+            # 🚨 デバッグコード: section_list_contents の構造を確認
+            if section_list_contents:
+                print(f"DEBUG: 📦 sectionListRenderer.contents のアイテム数: {len(section_list_contents)}")
+            
+            if section_list_contents and 'itemSectionRenderer' in section_list_contents[0]:
+                video_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
+                
+                # 🚨 デバッグコード: video_items_container のアイテム数を確認
+                print(f"DEBUG: 🎯 video_items_container (動画候補) のアイテム数: {len(video_items_container)}")
+            else:
+                video_items_container = []
+        
+        # 6. 動画データと継続トークンの抽出
         videos = []
         next_continuation = None # 次の継続トークン
 
