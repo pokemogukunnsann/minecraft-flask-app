@@ -590,6 +590,16 @@ def search_videos():
     
         # 5. APIデータから動画リストを抽出（ページネーション対応）
         
+token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}', api_data_text)
+        
+        if token_debug_matches:
+            print(f"DEBUG: ✅ APIレスポンス内で継続トークンを発見しました: {token_debug_matches[0]} (他{len(token_debug_matches)-1}件)")
+        else:
+            print("DEBUG: ⚠️ APIレスポンス内で継続トークン（token）は見つかりませんでした。")
+
+
+        # 5. APIデータから動画リストを抽出（ページネーション対応）
+        
         if continuation_token:
             # Continuation のレスポンスからアイテムを取得
             continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
