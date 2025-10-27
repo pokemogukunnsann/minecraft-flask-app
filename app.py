@@ -574,6 +574,8 @@ def search_videos():
             }
 
         api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
+        print(" ⬇️ APIにしたYoutubeリンク　⬇️ ")
+        print(f"{api_url}")
         
         headers_api = {
             'Content-Type': 'application/json',
