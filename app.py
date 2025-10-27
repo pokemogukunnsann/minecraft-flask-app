@@ -612,10 +612,11 @@ def search_videos():
             # Continuation のレスポンスからアイテムを取得
             continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
             video_items_container = continuation_items
+            print(f" 📺　video_items_container:{video_items_container}")
         else:
             # 初期検索のレスポンスからアイテムを取得
             section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
-            
+            print(f" 📦　section_list_contents:{section_list_contents}")
             video_items_container = []
             
             # 🚨 デバッグコード: section_list_contents の構造を確認
