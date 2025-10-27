@@ -490,46 +490,21 @@ def home_videos():
 
 
 
-# --- チャンネル検索 API 関数 ---
-
-
-# --- 検索 API 関数 ---
-
-
-
-# ※ create_json_response と get_dynamic_client_version は
-#    app.py の先頭で既に定義済みであることを前提とします。
-
-# ※ create_json_response と get_dynamic_client_version は
-#    app.py の先頭で既に定義済みであることを前提とします。
-
-# ※ create_json_response と get_dynamic_client_version は
-#    app.py の先頭で既に定義済みであることを前提とします。
-
-# ※ create_json_response と get_dynamic_client_version は
-#    app.py の先頭で既に定義済みであることを前提とします。
-
 # ※ create_json_response と get_dynamic_client_version は
 #    app.py の先頭で既に定義済みであることを前提とします。
 
 @app.route('/API/yt/search', methods=['GET'])
 def search_videos():
-    """検索キーワード(q)、またはページ番号(page)を受け取り、動画リストと次のページ番号を返す。"""
+    """検索キーワード(q)、またはページ番号(page)を受け取り、動画リストと次の継続トークンを返す。
+    type=dataが指定された場合、生のAPIレスポンスデータを返す。"""
     
     query_keyword = request.args.get('q')
-    page_number = request.args.get('page')
-    pokemogu = request.args.get('type')
-    
-    # ページ番号を整数として取得、デフォルトは1ページ目
-    try:
-        page = int(page_number) if page_number else 1
-    except ValueError:
-        return create_json_response({'error': 'ページ番号 (page) が不正な値です'}, 400)
-    
+    # 🚨 追加: page と type パラメータを取得
+    page_number = request.args.get('page') 
+    request_type = request.args.get('type') # 変数名を 'request_type' に変更して混乱を防ぐ
+
     if not query_keyword:
         return create_json_response({'error': '検索キーワード (q) がありません'}, 400) 
-
-    
 
     # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
     api_key = None
@@ -539,7 +514,7 @@ def search_videos():
     url = "https://www.youtube.com/" 
     
     try:
-        # (APIキーなどの取得ロジック...省略)
+        # (HTMLからの情報抽出ロジック...省略)
         headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
         response = requests.get(url, headers=headers_html, timeout=10)
         response.raise_for_status()
@@ -576,54 +551,12 @@ def search_videos():
         if visitor_data:
              context_data['client']['visitorData'] = visitor_data
         
-        # 🚨 ページ番号に基づいて Protobuf エンコードされたトークンを作成
-        # page=1の場合はparamsに動画フィルタのみを含める
-        if page == 1:
-            api_url_path = "/youtubei/v1/search"
-            # 🚨 フィルタを復活: "EgIQAQ%3D%3D" は動画のみをフィルタする
-            payload = {
-                "query": query_keyword, 
-                "params": "EgIQAQ%3D%3D", 
-                "context": context_data
-            }
-        else:
-            # 🚨 2ページ目以降は /browse を使用し、ページ番号をエンコードしたparamsを使用
-            api_url_path = "/youtubei/v1/browse"
-            
-            # ページ番号に基づくProtobufエンコード (Invidiousを参考に、ページ番号をProtobufとしてparamsに設定)
-            # これは動画フィルタとページオフセットを含んでいます
-            # ページ番号 p に対して、オフセットは 30 * (p - 1)
-            offset = 30 * (page - 1)
-            
-            # 'search_continuation' 構造をベースとしたエンコード（簡略版）
-            # search_continuation: type=search, filter=video, offset=offset
-            encoded_params = f"4gIWHgUIARgBIAAoAlABmgEaCwgJCAwQChABGAEgAVABmwEaCwgJCAwQChABGAEgAVABogEgAVABwgIaCwgJCAwQChABGAEgAVABjQEjCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABmgEaCwgJCAwQChABGAEgAVABjQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABmgEaCwgJCAwQChABGAEgAVABjQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABmgEaCwgJCAwQChABGAEgAVABjQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABmgEaCwgJCAwQChABGAEgAVABjQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABmgEaCwgJCAwQChABGAEgAVABjQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABmgEaCwgJCAwQChABGAEgAVABjQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABmgEaCwgJCAwQChABGAEgAVABjQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABmgEaCwgJCAwQChABGAEgAVABjQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVABkQEiCwgJCAwQChABGAEgAVAB"
-            
-            # ページ番号に応じたオフセットをエンコードするためのトークン生成は複雑なため、
-            # シンプルな継続トークン（最後のアイテムから取得できるもの）が依然として最も信頼性が高いです。
-            # ここでは、手動エンコードの複雑さを避けるため、一旦ページ番号はサポート外とします。
-            
-            # 🙅‍♀️ ページ番号による複雑な Protobuf エンコードは一旦保留
-            # 🙆‍♀️ 継続トークンのみによるシンプルなページネーションに戻す
-
-            # 継続トークンは初期検索で取得できないため、ページングは現状ではサポートできません。
-            # 最終的な判断として、継続トークンを要求する /browse エンドポイントに統一します。
-            # しかし、これだと initial_data が得られない...
-
-            # 💡 最後の手段: ページ番号を無視し、継続トークンが見つからない場合は処理を終了する
-
-            return create_json_response({'error': '初期検索では継続トークンが返されないため、現在のAPIではページングはできません。'}, 500)
-            
-        # 🙅‍♀️ 複雑すぎるため、一旦ページングロジックは削除し、初期検索のみに集中します。
-
-        # 検索の種類とAPI URLを分岐: /search 固定（動画フィルタ復活）
         api_url_path = "/youtubei/v1/search"
         payload = {
             "query": query_keyword, 
             "params": "EgIQAQ%3D%3D", # 動画フィルタ
             "context": context_data
         }
-
 
         api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
         
@@ -638,11 +571,18 @@ def search_videos():
         
         api_data_text = api_response.text
         api_data = json.loads(api_data_text)
-
-        if pokemogu:
-        return create_json_response(f"{api_data}", 200) 
         
-        # 🚨 デバッグ処理 1: 生データから継続トークン（token）を抽出して出力
+        # 🚨 追加: type=data の場合は生データを返す
+        if request_type == 'data': # 比較演算子 == を使用
+            # api_data は既にPythonの辞書なので、そのままJSONレスポンスに渡す
+            return create_json_response(api_data, 200)
+
+        if not request_type:
+            # typeが指定されていない場合は通常処理（この時点では生データは返さない）
+            print("DEBUG: typeが指定されていないため、通常処理で返します。")
+        
+        
+        # 🚨 デバッグ処理 1: 生データから継続トークン（token）を抽出して出力 (ここはデバッグ用として残す)
         token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}', api_data_text)
         
         if token_debug_matches:
@@ -651,9 +591,7 @@ def search_videos():
             print("DEBUG: ⚠️ APIレスポンス内で継続トークン（token）は見つかりませんでした。")
         
         
-        # 5. APIデータから動画リストを抽出（ページネーション対応）
-        # 🚨 継続トークンは常に null になるため、この部分はシンプルに戻します。
-        
+        # 5. APIデータから動画リストを抽出
         section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
         
         video_items_container = []
@@ -686,7 +624,7 @@ def search_videos():
             if not renderer: 
                 continue
 
-            # 動画情報の抽出
+            # 動画情報の抽出 (省略)
             video_id = renderer.get('videoId')
             title_obj = renderer.get('title', {})
             final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
@@ -715,7 +653,6 @@ def search_videos():
 
 
         # 戻り値に next_continuation を追加して返す
-        # 継続トークンは取得できないことが判明したため、この関数は「最初の20件程度を取得する」機能に限定されます。
         return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
 
     except requests.exceptions.HTTPError as e:
