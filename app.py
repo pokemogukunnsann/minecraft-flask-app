@@ -607,13 +607,22 @@ def search_videos():
             continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
             video_items_container = continuation_items
         else:
-            # 初期検索のレスポンスからアイテムを取得
-            section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
-            
-            if section_list_contents and 'itemSectionRenderer' in section_list_contents[0]:
-                video_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
-            else:
-                video_items_container = []
+    # 初期検索のレスポンスからアイテムを取得
+        section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
+    
+        video_items_container = []
+    
+    # 🚨 デバッグコード: section_list_contents の構造を確認
+        if section_list_contents:
+           print(f"DEBUG: 📦 sectionListRenderer.contents のアイテム数: {len(section_list_contents)}")
+    
+        if section_list_contents and 'itemSectionRenderer' in section_list_contents[0]:
+            video_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
+        
+        # 🚨 デバッグコード: video_items_container のアイテム数を確認
+            print(f"DEBUG: 🎯 video_items_container (動画候補) のアイテム数: {len(video_items_container)}")
+        else:
+            video_items_container = []
 
         videos = []
         next_continuation = None # 次の継続トークン
