@@ -494,11 +494,17 @@ def home_videos():
 
 # ※ create_json_response, get_dynamic_client_version, request, requests, json, re は定義済みとします。
 
+
+
+# ※ 'create_json_response' および 'get_dynamic_client_version' は
+#    この関数の外部で既に定義されていることを前提とします。
+
 @pokemogukunns.route('/API/yt/search', methods=['GET'])
 def search_videos():
     """検索キーワード(q)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。
     type=dataが指定された場合、生のAPIレスポンスデータを返す。"""
     
+    # URLパラメータの取得
     query_keyword = request.args.get('q')
     continuation_token = request.args.get('continuation')
     request_type = request.args.get('type') 
@@ -506,17 +512,16 @@ def search_videos():
     if not continuation_token and not query_keyword:
         return create_json_response({'error': '検索キーワード (q) または継続トークンがありません'}, 400) 
 
-    # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
+    # 1. 初期設定
     api_key = None
     client_version_fallback = get_dynamic_client_version()
     client_name = 'WEB'
     visitor_data = None 
-    url = "https://www.youtube.com/" 
     
     try:
-        # (APIキー、バージョン、VisitorDataの取得ロジック...省略)
+        # 1-2. APIキー、バージョン、VisitorDataの抽出
         headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
-        response = requests.get(url, headers=headers_html, timeout=10)
+        response = requests.get("https://www.youtube.com/", headers=headers_html, timeout=10)
         response.raise_for_status()
         html_content = response.text
         
@@ -578,56 +583,50 @@ def search_videos():
         # 4. 内部APIを叩く
         api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
         api_response.raise_for_status() 
+        api_data = api_response.json()
         
-        api_data_text = api_response.text
-        api_data = json.loads(api_data_text)
-        
-        # 🚨 type=data の場合は生データを返す
+        # type=data の場合は生データを返す
         if request_type == 'data':
             return create_json_response(api_data, 200)
 
-        # 🚨 デバッグ処理 (トークンが抽出できるようになったか確認)
-        token_debug_matches = re.findall(r'"continuationCommand":\{"token":"([^"]+?)"\}', api_data_text)
-        if token_debug_matches:
-            print(f"DEBUG: ✅ APIレスポンス内で継続トークンを発見しました: {token_debug_matches[0]} (他{len(token_debug_matches)-1}件)")
-        else:
-            print("DEBUG: ⚠️ APIレスポンス内で継続トークン（token）は見つかりませんでした。")
         
+        # 5. APIデータから動画リストと継続トークンを抽出
+        videos = []
+        next_continuation = None 
         
-        # 5. APIデータから動画リストを抽出
         if continuation_token:
-             # Continuation のレスポンスからアイテムを取得
-            continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
-            video_items_container = continuation_items
-            print(f"DEBUG: 📦 ContinuationItems のアイテム数: {len(continuation_items)}")
+            # Continuation のレスポンスからアイテムを取得
+            all_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
         else:
             # 初期検索のレスポンスからアイテムを取得
             section_list_contents = api_data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
             
-            video_items_container = []
+            # 抽出パス強化: sectionListRenderer.contents のリスト全体を探索対象とする
+            all_items = []
             
-            if section_list_contents:
-                print(f"DEBUG: 📦 sectionListRenderer.contents のアイテム数: {len(section_list_contents)}")
-            
-            if section_list_contents and 'itemSectionRenderer' in section_list_contents[0]:
-                video_items_container = section_list_contents[0].get('itemSectionRenderer', {}).get('contents', [])
-                
-                print(f"DEBUG: 🎯 video_items_container (動画候補) のアイテム数: {len(video_items_container)}")
-            else:
-                video_items_container = []
-        
-        # 6. 動画データと継続トークンの抽出
-        videos = []
-        next_continuation = None 
+            for section in section_list_contents:
+                 if 'itemSectionRenderer' in section:
+                     # 動画アイテムを含むリスト
+                     all_items.extend(section.get('itemSectionRenderer', {}).get('contents', []))
+                 
+                 # 継続トークンがセクションレベルにある場合も捕捉
+                 elif 'continuationItemRenderer' in section:
+                      all_items.append(section)
 
-        for item in video_items_container:
-            # 🚨 継続トークンを抽出
+
+        print(f"DEBUG: 🎯 all_items (動画とトークン候補) のアイテム数: {len(all_items)}")
+
+        # 6. 動画データと継続トークンの抽出
+        for item in all_items: 
+            # 継続トークンを最初に抽出
             continuation_item = item.get('continuationItemRenderer')
             if continuation_item:
                 extracted_token = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
+                
+                # 🚨 next_continuation の値を確定したら、printして次の処理に進む
                 next_continuation = extracted_token
                 print(f"DEBUG: 🚀 ロジックで次の継続トークンを抽出成功: {extracted_token}")
-                continue # トークンは動画リストに追加しない
+                continue
                 
             # 動画レンダラーのみを抽出
             renderer = item.get('videoRenderer') 
@@ -644,24 +643,20 @@ def search_videos():
             
             owner_text = renderer.get('ownerText', {}).get('runs', [{}])[0]
             channel_name = owner_text.get('text', 'チャンネル名不明')
-            channel_id_link = owner_text.get('navigationEndpoint', {}).get('browseEndpoint', {}).get('browseId')
             
             videos.append({
                 'video_id': video_id,
                 'title': final_title,
-                'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
                 'channel_name': channel_name, 
-                'channel_id': channel_id_link,
                 'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
                 'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
             })
 
-
+        # 7. 結果の返却
         if next_continuation is None:
             print("DEBUG: 🛑 next_continuation は null です。次のページは存在しないか、抽出に失敗しています。")
 
 
-        # 戻り値に next_continuation を追加して返す
         return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
 
     except requests.exceptions.HTTPError as e:
