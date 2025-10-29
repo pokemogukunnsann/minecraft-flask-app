@@ -1341,6 +1341,121 @@ def channel_metadata():
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+@app.route('/API/yt/channel/videos', methods=['GET'])
+def channel_videos():
+    """指定されたチャンネルIDの動画リストを取得するAPI。
+    
+    クエリパラメータ 'type=data' が付与されている場合、生のytInitialData (JSON) をそのまま返します。
+    """
+    
+    channel_id = request.args.get('c')
+    response_type = request.args.get('type') # 💡 type パラメータを取得
+    
+    print(f"channel_id:{channel_id}, type:{response_type}") # デバッグ出力
+    
+    if not channel_id:
+        return create_json_response({'error': 'Channel IDがありません。'}, 400)
+
+    # チャンネルの動画タブのURLを構築
+    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    
+    try:
+        print(f"Fetching URL: {url}")
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        html_content = response.text
+        
+        # 1. HTMLからytInitialData (JSON) を抽出
+        match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
+        if not match:
+            return create_json_response({'error': 'Initial video data (ytInitialData)が見つかりませんでした。'}, 500)
+        
+        # 2. JSONをパース
+        data = json.loads(match.group(1))
+        
+        # 💡 【追加ロジック】: type=data の場合は生のJSONデータをそのまま返す
+        if response_type == 'data':
+            print("Response type is 'data'. Returning raw JSON data.")
+            return create_json_response(data, 200)
+
+        # 3. 通常の動画リストの抽出処理
+        videos_data = []
+        
+        tab_contents = data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
+
+        video_tab = None
+        for tab in tab_contents:
+            tab_renderer = tab.get('tabRenderer', {})
+            if tab_renderer.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '').endswith('/videos'):
+                video_tab = tab_renderer
+                break
+        
+        if not video_tab:
+            return create_json_response({'error': '動画リストを含むタブが見つかりませんでした。'}, 500)
+
+        section_list = video_tab.get('content', {}).get('sectionListRenderer', {})
+        
+        grid_renderer = section_list.get('contents', [{}])[0].get('itemSectionRenderer', {}).get('contents', [{}])[0].get('gridRenderer', {})
+        
+        if not grid_renderer:
+            return create_json_response({'error': '動画リスト（GridRenderer）が見つかりませんでした。'}, 500)
+
+        for item in grid_renderer.get('items', []):
+            video_renderer = item.get('gridVideoRenderer')
+            if video_renderer:
+                video_id = video_renderer.get('videoId')
+                
+                title = video_renderer.get('title', {}).get('runs', [{}])[0].get('text', 'タイトル不明')
+                views = video_renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
+                
+                thumbnail_url = 'N/A'
+                thumbnails = video_renderer.get('thumbnail', {}).get('thumbnails', [])
+                if thumbnails:
+                    thumbnail_url = thumbnails[-1].get('url')
+
+                videos_data.append({
+                    'video_id': video_id,
+                    'title': title,
+                    'views': views,
+                    'thumbnail_url': thumbnail_url
+                })
+        
+        print(f"Successfully extracted {len(videos_data)} videos for channel: {channel_id}")
+        return create_json_response({'channel_id': channel_id, 'videos': videos_data}, 200)
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            return create_json_response({'error': f'チャンネルが見つかりません。ID({channel_id})を確認してください。'}, 404)
+        return create_json_response({'error': f'外部URLの取得に失敗しました: {e}'}, 503)
+    except Exception as e:
+        print(f"Critical error during channel videos fetching: {e}")
+        return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route('/API/yt/playlist', methods=['GET'])
 def playlist_data():
     """playlist.html用の再生リストデータと動画リストを返すAPI"""
