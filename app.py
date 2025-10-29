@@ -1524,27 +1524,45 @@ def channel_next_video_invidious_robust():
         endpoint = f"/api/v1/channels/{urllib.parse.quote(identifier)}/videos?page={page_number}"
         data = invidious_api_request_robust(endpoint)
         
+        # 生データを返すオプション
         if data_type == 'data':
             print("type=dataが指定されたため、生JSONをそのまま返します。")
             return create_json_response(data, 200)
 
-        videos = []
+        # --- 修正された整形ロジック ---
+        videos_data = []
+        continuation_token = None
+
         if isinstance(data, list):
-            for video in data:
-                videos.append({
-                    'video_id': video["videoId"],
-                    'title': video["title"],
-                    'views': video.get("viewCount", "N/A"), 
-                    'published_at': video["publishedText"],
-                    'thumbnail_url': video["videoThumbnails"][-1]["url"] if video.get("videoThumbnails") else 'N/A'
-                })
+            # リスト形式の場合 (旧形式/一部インスタンス)
+            videos_data = data
+        elif isinstance(data, dict) and data.get("videos") is not None:
+            # 辞書形式の場合 (継続トークンを含む場合)
+            videos_data = data["videos"]
+            continuation_token = data.get("continuation")
+        
+        videos = []
+        if videos_data:
+            for video in videos_data:
+                # 動画オブジェクトがtypeを持つことを確認（プレイリストなど除外）
+                if video.get("type") == "video":
+                    video_data = {
+                        'video_id': video["videoId"],
+                        'title': video["title"],
+                        'views': video.get("viewCount", "N/A"), 
+                        'published_at': video["publishedText"],
+                        'thumbnail_url': video["videoThumbnails"][-1]["url"] if video.get("videoThumbnails") else 'N/A'
+                    }
+                    videos.append(video_data)
+                    print(f"video_data:{video_data}")
 
         response_data = {
             'identifier': identifier,
             'page': page_number,
             'videos': videos,
-            'continuation_token': None 
+            'continuation_token': continuation_token # 継続トークンがあれば含める
         }
+        print(f"response_data:{response_data}")
         
         print(f"抽出された動画数: {len(videos)}")
         return create_json_response(response_data, 200)
@@ -1554,7 +1572,6 @@ def channel_next_video_invidious_robust():
     except Exception as e:
         print(f"Critical error: {e}", file=sys.stderr)
         return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
-
 
 
 
