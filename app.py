@@ -1355,9 +1355,7 @@ def channel_metadata():
 
 
 
-
-# 修正が必要なのはこの関数です
-
+# 修正後の関数全体
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
     """指定されたチャンネルIDまたはカスタムURLの動画リストを取得するAPI。
@@ -1374,18 +1372,15 @@ def channel_videos():
     if not channel_identifier:
         return create_json_response({'error': 'Channel IDまたはカスタムURLがありません。'}, 400)
 
-    # 💡 【カスタムURL対応ロジックの追加】
+    # カスタムURL (@バンドル) またはチャンネルIDに応じてURLを決定
     if channel_identifier.startswith('@'):
-        # カスタムURLの場合: https://www.youtube.com/@ユーザー名/videos
         url = f"https://www.youtube.com/{channel_identifier}/videos"
         print(f"Using Custom URL: {url}")
     else:
-        # 従来のチャンネルIDの場合: https://www.youtube.com/channel/UC.../videos
         url = f"https://www.youtube.com/channel/{channel_identifier}/videos"
         print(f"Using Channel ID URL: {url}")
     
     try:
-        print(f"Fetching URL: {url}")
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         
@@ -1399,21 +1394,19 @@ def channel_videos():
         # 2. JSONをパース
         data = json.loads(match.group(1))
         
-        # 💡 type=data の場合は生のJSONデータをそのまま返す
+        # type=data の場合は生のJSONデータをそのまま返す
         if response_type == 'data':
             print("Response type is 'data'. Returning raw JSON data.")
             return create_json_response(data, 200)
 
-        # 3. 通常の動画リストの抽出処理
-        videos_data = []
+        # 3. 動画リストコンテナの検索
         
-        # 抽出パスは、チャンネルID/videos も カスタムURL/videos も概ね共通
         tab_contents = data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
 
         video_tab = None
         for tab in tab_contents:
             tab_renderer = tab.get('tabRenderer', {})
-            # 'videos' タブを探す (カスタムURLでもこのタブが存在する)
+            # URLが '/videos' で終わるタブを探す
             if tab_renderer.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '').endswith('/videos'):
                 video_tab = tab_renderer
                 break
@@ -1421,20 +1414,55 @@ def channel_videos():
         if not video_tab:
             return create_json_response({'error': '動画リストを含むタブが見つかりませんでした。'}, 500)
 
+        videos_data = []
+        video_items = []
+        video_renderer_key = None
+        
+        # 💡 【RichGridRenderer対応】: 新しい構造 (tabRenderer -> content -> richGridRenderer)
+        rich_grid_renderer = video_tab.get('content', {}).get('richGridRenderer')
+        
+        # 💡 【GridRenderer対応】: 従来の構造 (tabRenderer -> content -> sectionListRenderer -> ... -> gridRenderer)
+        grid_renderer = None
         section_list = video_tab.get('content', {}).get('sectionListRenderer', {})
-        
-        # 動画グリッドを取得
-        grid_renderer = section_list.get('contents', [{}])[0].get('itemSectionRenderer', {}).get('contents', [{}])[0].get('gridRenderer', {})
-        
-        if not grid_renderer:
-            return create_json_response({'error': '動画リスト（GridRenderer）が見つかりませんでした。'}, 500)
+        if section_list:
+            # 従来の複雑なパスをたどる
+            grid_renderer = section_list.get('contents', [{}])[0].get('itemSectionRenderer', {}).get('contents', [{}])[0].get('gridRenderer', {})
 
-        # 動画アイテムを抽出
-        for item in grid_renderer.get('items', []):
-            video_renderer = item.get('gridVideoRenderer')
+
+        if rich_grid_renderer:
+            # richGridRenderer の場合は 'contents' を取得し、rendererは 'richItemRenderer' の中にある
+            video_items = rich_grid_renderer.get('contents', [])
+            video_renderer_key = 'richItemRenderer'
+            print("Using RichGridRenderer structure.")
+            
+        elif grid_renderer:
+            # gridRenderer の場合は 'items' を取得し、rendererは 'gridVideoRenderer'
+            video_items = grid_renderer.get('items', [])
+            video_renderer_key = 'gridVideoRenderer'
+            print("Using GridRenderer structure.")
+            
+        else:
+            return create_json_response({'error': '動画リストのレンダラー（RichGridRendererまたはGridRenderer）が見つかりませんでした。'}, 500)
+
+        # 4. 動画アイテムの抽出ループ
+        for item in video_items:
+            video_renderer = None
+            
+            if video_renderer_key == 'richItemRenderer':
+                # richGridRenderer のパス: richItemRenderer -> content -> videoRenderer
+                rich_item = item.get('richItemRenderer')
+                if rich_item:
+                    video_renderer = rich_item.get('content', {}).get('videoRenderer')
+            
+            elif video_renderer_key == 'gridVideoRenderer':
+                # gridRenderer のパス: item -> gridVideoRenderer
+                video_renderer = item.get('gridVideoRenderer')
+
+
             if video_renderer:
                 video_id = video_renderer.get('videoId')
                 
+                # タイトル、視聴回数、サムネイルの抽出ロジックは共通
                 title = video_renderer.get('title', {}).get('runs', [{}])[0].get('text', 'タイトル不明')
                 views = video_renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
                 
@@ -1455,13 +1483,12 @@ def channel_videos():
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            # 404の場合、IDまたはカスタムURLが存在しない可能性が高い
             return create_json_response({'error': f'チャンネルが見つかりません。IDまたはカスタムURL ({channel_identifier}) を確認してください。'}, 404)
         return create_json_response({'error': f'外部URLの取得に失敗しました: {e}'}, 503)
     except Exception as e:
         print(f"Critical error during channel videos fetching: {e}")
         return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
-
+        
 
 
 
