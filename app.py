@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, Response, stream_with_context, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, Response, stream_with_context, jsonify, make_response
 import hashlib
 import requests
 import json
