@@ -1828,22 +1828,51 @@ def video_data_invidious_robust():
 
 
 @app.route('/API/yt/playlist', methods=['GET'])
-def playlist_data():
-    """playlist.html用の再生リストデータと動画リストを返すAPI"""
+def playlist_data_invidious_robust():
+    # パラメータを 'list' に統一
     playlist_id = request.args.get('list')
-    if not playlist_id:
-        return jsonify({'error': 'Playlist ID is missing'}), 400
-
-    videos = [create_dummy_video(i) for i in range(1, 6)] 
+    print(f"playlist_id:{playlist_id}")
     
-    return jsonify({
-        'title': f"マイクラ神ワザ集 【リストID:{playlist_id}}}",
-        'channel_name': DUMMY_CHANNEL['name'],
-        'description': 'マイクラで使える便利なテクニックをまとめた再生リストです。',
-        'video_count': len(videos),
-        'videos': videos
-    }), 200
+    if not playlist_id:
+        return create_json_response({'error': 'プレイリストID (list) がありません。'}, 400)
 
+    try:
+        # Invidious API: /api/v1/playlists/{id}
+        endpoint = f"/api/v1/playlists/{urllib.parse.quote(playlist_id)}"
+        data = invidious_api_request_robust(endpoint)
+        
+        videos = []
+        if data.get("videos"):
+            for video in data["videos"]:
+                video_data = {
+                    'video_id': video["videoId"],
+                    'title': video["title"],
+                    'author': video["author"],
+                    'author_id': video["authorId"],
+                    'video_length': video.get("lengthSeconds"),
+                    'thumbnail_url': video["videoThumbnails"][-1]["url"] if video.get("videoThumbnails") else 'N/A'
+                }
+                videos.append(video_data)
+                print(f"video_data:{video_data}")
+
+        response_data = {
+            'playlist_id': data.get("playlistId"),
+            'title': data.get("title"),
+            'channel_name': data.get("author"),
+            'author_id': data.get("authorId"),
+            'description': data.get("description"),
+            'video_count': data.get("videoCount"),
+            'videos': videos
+        }
+        print(f"response_data:{response_data}")
+        
+        return create_json_response(response_data, 200)
+
+    except APIRequestFailed as e:
+        return create_json_response({'error': str(e)}, 503)
+    except Exception as e:
+        print(f"Critical error: {e}", file=sys.stderr)
+        return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
 
 # ------------------------------------------------
 # 4. アプリケーションのエントリポイント (ページルート)
@@ -1859,15 +1888,15 @@ def home():
     
 @app.route('/setting')
 def setting():
-    return render_template('setting.html')
+    return render_template('404.html')
     
 @app.route('/store')
 def store():
-    return render_template('store.html')
+    return render_template('404.html')
     
 @app.route('/server')
 def server_page():
-    return render_template('server.html')
+    return render_template('404.html')
 
 # ------------------------------------------------
 # 5. アプリケーションの実行
