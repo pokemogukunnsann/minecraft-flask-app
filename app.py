@@ -1123,8 +1123,14 @@ def video_metadata():
             profile_img_url = thumbnails[-1].get('url', profile_img_url)
         
         # 説明文
-        description_runs = secondary_info.get('description', {}).get('runs', [])
-        description = "".join([run.get('text', '') for run in description_runs])
+        description = ''
+        attributed_desc_content = secondary_info.get('attributedDescription', {}).get('content')
+        if attributed_desc_content:
+            description = attributed_desc_content
+        else:
+            # フォールバックとして従来の description.runs をチェック
+            description_runs = secondary_info.get('description', {}).get('runs', [])
+            description = "".join([run.get('text', '') for run in description_runs])
         
         # 6. 最終結果をまとめる
         final_data = {
