@@ -1354,23 +1354,35 @@ def channel_metadata():
 
 
 
+
+
+# 修正が必要なのはこの関数です
+
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
-    """指定されたチャンネルIDの動画リストを取得するAPI。
+    """指定されたチャンネルIDまたはカスタムURLの動画リストを取得するAPI。
     
-    クエリパラメータ 'type=data' が付与されている場合、生のytInitialData (JSON) をそのまま返します。
+    クエリパラメータ 'c' は 'UC...' (チャンネルID) または '@ユーザー名' (カスタムURL) に対応します。
+    'type=data' が付与されている場合、生のytInitialData (JSON) をそのまま返します。
     """
     
-    channel_id = request.args.get('c')
-    response_type = request.args.get('type') # 💡 type パラメータを取得
+    channel_identifier = request.args.get('c')
+    response_type = request.args.get('type')
     
-    print(f"channel_id:{channel_id}, type:{response_type}") # デバッグ出力
+    print(f"channel_identifier:{channel_identifier}, type:{response_type}")
     
-    if not channel_id:
-        return create_json_response({'error': 'Channel IDがありません。'}, 400)
+    if not channel_identifier:
+        return create_json_response({'error': 'Channel IDまたはカスタムURLがありません。'}, 400)
 
-    # チャンネルの動画タブのURLを構築
-    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    # 💡 【カスタムURL対応ロジックの追加】
+    if channel_identifier.startswith('@'):
+        # カスタムURLの場合: https://www.youtube.com/@ユーザー名/videos
+        url = f"https://www.youtube.com/{channel_identifier}/videos"
+        print(f"Using Custom URL: {url}")
+    else:
+        # 従来のチャンネルIDの場合: https://www.youtube.com/channel/UC.../videos
+        url = f"https://www.youtube.com/channel/{channel_identifier}/videos"
+        print(f"Using Channel ID URL: {url}")
     
     try:
         print(f"Fetching URL: {url}")
@@ -1387,7 +1399,7 @@ def channel_videos():
         # 2. JSONをパース
         data = json.loads(match.group(1))
         
-        # 💡 【追加ロジック】: type=data の場合は生のJSONデータをそのまま返す
+        # 💡 type=data の場合は生のJSONデータをそのまま返す
         if response_type == 'data':
             print("Response type is 'data'. Returning raw JSON data.")
             return create_json_response(data, 200)
@@ -1395,11 +1407,13 @@ def channel_videos():
         # 3. 通常の動画リストの抽出処理
         videos_data = []
         
+        # 抽出パスは、チャンネルID/videos も カスタムURL/videos も概ね共通
         tab_contents = data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
 
         video_tab = None
         for tab in tab_contents:
             tab_renderer = tab.get('tabRenderer', {})
+            # 'videos' タブを探す (カスタムURLでもこのタブが存在する)
             if tab_renderer.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '').endswith('/videos'):
                 video_tab = tab_renderer
                 break
@@ -1409,11 +1423,13 @@ def channel_videos():
 
         section_list = video_tab.get('content', {}).get('sectionListRenderer', {})
         
+        # 動画グリッドを取得
         grid_renderer = section_list.get('contents', [{}])[0].get('itemSectionRenderer', {}).get('contents', [{}])[0].get('gridRenderer', {})
         
         if not grid_renderer:
             return create_json_response({'error': '動画リスト（GridRenderer）が見つかりませんでした。'}, 500)
 
+        # 動画アイテムを抽出
         for item in grid_renderer.get('items', []):
             video_renderer = item.get('gridVideoRenderer')
             if video_renderer:
@@ -1434,12 +1450,13 @@ def channel_videos():
                     'thumbnail_url': thumbnail_url
                 })
         
-        print(f"Successfully extracted {len(videos_data)} videos for channel: {channel_id}")
-        return create_json_response({'channel_id': channel_id, 'videos': videos_data}, 200)
+        print(f"Successfully extracted {len(videos_data)} videos for identifier: {channel_identifier}")
+        return create_json_response({'identifier': channel_identifier, 'videos': videos_data}, 200)
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            return create_json_response({'error': f'チャンネルが見つかりません。ID({channel_id})を確認してください。'}, 404)
+            # 404の場合、IDまたはカスタムURLが存在しない可能性が高い
+            return create_json_response({'error': f'チャンネルが見つかりません。IDまたはカスタムURL ({channel_identifier}) を確認してください。'}, 404)
         return create_json_response({'error': f'外部URLの取得に失敗しました: {e}'}, 503)
     except Exception as e:
         print(f"Critical error during channel videos fetching: {e}")
