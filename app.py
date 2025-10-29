@@ -244,9 +244,109 @@ def save_single_player_data(player_data):
 
 # ... (他のヘルパー関数: upload_directory_to_github, parse_mc_pack, load_pack_registry, save_pack_registry, load_world_data, save_world_data, capture_game_output, get_manifest_from_github は全てこのブロックに定義済みと仮定) ...
 
-# ------------------------------------------------
-# 2. 認証関連ルート
-# ------------------------------------------------
+create_json_response(data, status_code):
+    """JSONレスポンスを生成し、ヘッダーを設定するヘルパー関数"""
+    response = make_response(jsonify(data), status_code)
+    response.headers['Content-Type'] = 'application/json'
+    return response
+
+def extract_continuation_token(data):
+    """YouTube APIの初回応答から継続トークンを抽出するヘルパー関数"""
+    # ユーザーが指摘したパスをたどるための探索ロジック
+    try:
+        # data -> contents -> twoColumnBrowseResultsRenderer -> tabs[1] -> tabRenderer -> content -> sectionListRenderer -> contents
+        section_contents = data.get('contents', {}) \
+                             .get('twoColumnBrowseResultsRenderer', {}) \
+                             .get('tabs', [])[1] \
+                             .get('tabRenderer', {}) \
+                             .get('content', {}) \
+                             .get('sectionListRenderer', {}) \
+                             .get('contents', [])
+
+        if not section_contents:
+            return None
+
+        last_item = section_contents[-1]
+        
+        # itemSectionRenderer の中にある continuationItemRenderer を探す
+        continuation_renderer = last_item.get('itemSectionRenderer', {}) \
+                                         .get('contents', [{}])[0] \
+                                         .get('continuationItemRenderer')
+                                         
+        if continuation_renderer:
+            command = continuation_renderer.get('continuationEndpoint', {}) \
+                                           .get('continuationCommand', {})
+            
+            token = command.get('token')
+            
+            print(f"抽出された継続トークン: {token}")
+            return token
+
+    except (IndexError, AttributeError, KeyError, TypeError):
+        print("初期継続トークンの抽出に失敗しました。")
+        return None
+        
+    return None
+
+def extract_continuation_results(data):
+    """継続トークンリクエスト後のレスポンスから動画と次の継続トークンを抽出するヘルパー関数"""
+    videos = []
+    next_token = None
+    
+    try:
+        # 継続リクエストのレスポンスのパス
+        continuation_contents = data.get('onResponseReceivedActions', [{}])[0] \
+                                   .get('appendContinuationItemsAction', {}) \
+                                   .get('continuationItems', [])
+
+        
+        for item in continuation_contents:
+            if 'gridRenderer' in item:
+                grid_contents = item['gridRenderer'].get('items', [])
+                
+                for video_item in grid_contents:
+                    video_renderer = video_item.get('gridVideoRenderer')
+                    
+                    if video_renderer:
+                        v_id = video_renderer.get('videoId')
+                        title_runs = video_renderer.get('title', {}).get('runs', [])
+                        title = "".join(r['text'] for r in title_runs) if title_runs else 'タイトル不明'
+                        
+                        metadata = video_renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明')
+                        views = video_renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
+
+                        thumbnail_url = 'N/A'
+                        thumbnails = video_renderer.get('thumbnail', {}).get('thumbnails', [])
+                        if thumbnails:
+                            thumbnail_url = thumbnails[-1].get('url') 
+                        
+                        videos.append({
+                            'video_id': v_id,
+                            'title': title,
+                            'views': views,
+                            'published_at': metadata,
+                            'thumbnail_url': thumbnail_url
+                        })
+                        
+            elif 'continuationItemRenderer' in item:
+                continuation_renderer = item.get('continuationItemRenderer')
+                if continuation_renderer:
+                    command = continuation_renderer.get('continuationEndpoint', {}) \
+                                                   .get('continuationCommand', {})
+                    next_token = command.get('token')
+                    print(f"next_token:{next_token}")
+
+    except (IndexError, AttributeError, KeyError, TypeError) as e:
+        print(f"継続リクエスト結果の抽出中にエラー: {e}")
+        pass
+
+    return videos, next_token
+
+
+
+
+
+
 
 @app.route('/login', methods=['POST'])
 def login():
