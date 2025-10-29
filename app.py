@@ -1500,6 +1500,61 @@ def channel_metadata():
 
 
 
+@app.route('/API/yt/channel/next-video', methods=['GET'])
+def channel_next_video_invidious_robust():
+    identifier = request.args.get('c')
+    print(f"identifier:{identifier}")
+    page = request.args.get('page')
+    print(f"page:{page}")
+    data_type = request.args.get('type')
+    print(f"data_type:{data_type}")
+    
+    if not identifier:
+        return create_json_response({'error': 'チャンネルID (c) がありません。'}, 400)
+    
+    try:
+        page_number = int(page) if page else 1
+        print(f"page_number:{page_number}")
+    except ValueError:
+        return create_json_response({'error': 'pageパラメータが不正です。整数を指定してください。'}, 400)
+
+    try:
+        # Invidious API: /api/v1/channels/{id}/videos?page={page}
+        endpoint = f"/api/v1/channels/{urllib.parse.quote(identifier)}/videos?page={page_number}"
+        data = invidious_api_request_robust(endpoint)
+        
+        if data_type == 'data':
+            print("type=dataが指定されたため、生JSONをそのまま返します。")
+            return create_json_response(data, 200)
+
+        videos = []
+        if isinstance(data, list):
+            for video in data:
+                videos.append({
+                    'video_id': video["videoId"],
+                    'title': video["title"],
+                    'views': video.get("viewCount", "N/A"), 
+                    'published_at': video["publishedText"],
+                    'thumbnail_url': video["videoThumbnails"][-1]["url"] if video.get("videoThumbnails") else 'N/A'
+                })
+
+        response_data = {
+            'identifier': identifier,
+            'page': page_number,
+            'videos': videos,
+            'continuation_token': None 
+        }
+        
+        print(f"抽出された動画数: {len(videos)}")
+        return create_json_response(response_data, 200)
+
+    except APIRequestFailed as e:
+        return create_json_response({'error': str(e)}, 503)
+    except Exception as e:
+        print(f"Critical error: {e}", file=sys.stderr)
+        return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
+
+
 
 
 
