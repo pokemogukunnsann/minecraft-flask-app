@@ -1295,163 +1295,116 @@ def channel_metadata():
 
 
 
-# ※ Flaskアプリ内で、requests, json, re, create_json_responseがインポートされていることを前提とします。
-
-# --- ヘルパー関数は使用せず、この関数内で直接キーを抽出します ---
-# ※ Flaskアプリ内で、requests, json, re, create_json_responseがインポートされていることを前提とします。
 
 
-# ※ 以下の create_json_response 関数は、Flaskアプリケーションで定義されていることを前提とします。
-# 例: def create_json_response(data, status_code): return app.response_class(response=json.dumps(data, ensure_ascii=False), status=status_code, mimetype='application/json')
 
-# ※ app.py内の既存の get_dynamic_client_version 関数と create_json_response 関数は定義済みを前提とします。
 
-@app.route('/API/yt/channel/videos', methods=['GET'])
-def channel_videos():
-    """チャンネルID(c)または継続トークン(continuation)を受け取り、動画リストと次の継続トークンを返す。"""
+
+@app.route('/API/yt/channel', methods=['GET'])
+def channel_metadata():
+    """チャンネルメタデータを返すAPI。文字化け対策に create_json_response を使用。
     
+    クエリパラメータ 'type=data' が付与されている場合、生のytInitialData (JSON) をそのまま返します。
+    """
     channel_id = request.args.get('c')
-    continuation_token = request.args.get('continuation')
-
-    if not continuation_token and not channel_id:
-        return create_json_response({'error': 'チャンネルID (c) または継続トークンがありません'}, 400) 
-
-    # 1. APIキー、バージョン、VisitorDataを抽出するための初期設定
-    api_key = None
-    client_version_fallback = get_dynamic_client_version()
-    client_name = 'WEB'
-    visitor_data = None 
+    response_type = request.args.get('type') # 💡 type パラメータを取得
     
-    # チャンネルの動画タブのURL
-    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    print(f"channel_id:{channel_id}, type:{response_type}")
     
+    if not channel_id:
+        return create_json_response({'error': 'Channel ID is missing'}, 400)
+
+    # URLの構築
+    if channel_id.startswith('@'):
+        url = f"https://www.youtube.com/{channel_id}"
+    elif channel_id.startswith('UC') and len(channel_id) >= 20:
+        url = f"https://www.youtube.com/channel/{channel_id}"
+    elif ' ' not in channel_id and '/' not in channel_id:
+        url = f"https://www.youtube.com/@{channel_id}"
+    else:
+        return create_json_response({'error': '無効なチャンネルIDまたはハンドル形式です。'}, 400)
+        
     try:
-        # 1. YouTubeチャンネル動画タブのHTMLを取得 (APIキーなどを取得)
-        headers_html = {'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'}
-        response = requests.get(url, headers=headers_html, timeout=10)
+        print(f"url:{url}")
+        response = requests.get(url, timeout=10)
+        print(f"response:{response}")
         response.raise_for_status()
         html_content = response.text
+        print(f"html_content:{html_content}")
         
-        # 2. APIキー、バージョン、VisitorDataを抽出
-        key_match = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"', html_content)
-        version_match = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9\.]+)"', html_content)
-        visitor_match = re.search(r'"VISITOR_DATA"\s*:\s*"([a-zA-Z0-9%\-_=]+)"', html_content)
-
-        if key_match:
-            api_key = key_match.group(1)
-            client_version = version_match.group(1) if version_match else client_version_fallback
-            visitor_data = visitor_match.group(1) if visitor_match else None
+        match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
+        print(f"match:{match}")
+        
+        if not match:
+            return create_json_response({'error': 'Initial channel data (ytInitialData) not found.'}, 500)
             
-            if client_version == client_version_fallback or not version_match: 
-                 client_version = client_version_fallback
-        else:
-            return create_json_response({'videos': [], 'error': 'APIキーが見つかりませんでした。'}, 500) 
+        data = json.loads(match.group(1))
+        print(f"data:{data}")
 
-        # 3. 内部APIのペイロード構築
-        context_data = {
-            "client": {
-                "hl": "ja", 
-                "gl": "JP",
-                "clientName": client_name,
-                "clientVersion": client_version,
-                "platform": "DESKTOP",
-                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36",
-            },
-            "user": {"lockedSafetyMode": False},
-            "request": {"useSsl": True}
+        # 💡 【追加ロジック】: type=data の場合は生のJSONデータをそのまま返す
+        if response_type == 'data':
+            print("Response type is 'data'. Returning raw JSON data.")
+            return create_json_response(data, 200)
+
+        # 従来の情報抽出ロジック (type=dataでない場合)
+        
+        # 情報抽出ロジック (複雑なフォールバックロジックを統合)
+        channel_info = data.get('metadata', {}).get('channelMetadataRenderer')
+        print(f"channel_info:{channel_info}")
+        
+        if not channel_info:
+            header_data = data.get('header', {})
+            print(f"header_data:{header_data}")
+            for key in ['channelHeaderRenderer', 'c4TabbedHeaderRenderer', 'engagementPanelTitleHeaderRenderer', 'pageHeaderRenderer']:
+                if key in header_data:
+                    channel_info = header_data.get(key)
+                    print(f"channel_info:{channel_info}")
+                    break
+
+        # チャンネル名
+        channel_name_obj = channel_info.get('title') or channel_info.get('pageTitle')
+        channel_name = channel_name_obj.get('simpleText') if isinstance(channel_name_obj, dict) and 'simpleText' in channel_name_obj else channel_name_obj or 'チャンネル名不明'
+        description = channel_info.get('description') or ''
+        print(f"channel_name_obj:{channel_name_obj}\n channel_name:{channel_name}\n description:{description}")
+        
+        # 登録者数
+        subscriber_text = "登録者数不明"
+        if 'header' in data:
+            for key in data['header'].keys():
+                if key.endswith('HeaderRenderer'):
+                    sub_obj = data['header'][key].get('subscriberCountText') or data['header'][key].get('subscribersText')
+                    if sub_obj and isinstance(sub_obj, dict) and 'simpleText' in sub_obj:
+                        subscriber_text = sub_obj['simpleText']
+                        break
+        
+        # プロフィール画像
+        avatar_obj = channel_info.get('avatar') or channel_info.get('image')
+        profile_img_url = 'https://dummyimage.com/80x80/000/fff&text=CM'
+        if avatar_obj and avatar_obj.get('thumbnails'):
+              profile_img_url = avatar_obj.get('thumbnails', [{}])[-1].get('url', profile_img_url)
+        elif avatar_obj and avatar_obj.get('decoratedAvatarViewModel', {}).get('avatar', {}).get('avatarViewModel', {}).get('image', {}).get('sources'):
+              sources = avatar_obj['decoratedAvatarViewModel']['avatar']['avatarViewModel']['image']['sources']
+              profile_img_url = sources[-1]['url']
+        
+        # 最終結果をJSONで返す 
+        final_data = {
+            'channel_id': channel_id,
+            'channel_name': channel_name,
+            'subscriber_count': subscriber_text,
+            'profile_image_url': profile_img_url,
+            'banner_image_url': '', 
+            'description': description,
+            'join_date': ''
         }
-        
-        if visitor_data:
-             context_data['client']['visitorData'] = visitor_data
-        
-        # 🚨 検索の種類とAPI URLを分岐
-        api_url_path = "/youtubei/v1/browse"
-        api_url = f"https://www.youtube.com{api_url_path}?key={api_key}"
-
-        if continuation_token:
-            # Continuation リクエスト
-            payload = {
-                "continuation": continuation_token,
-                "context": context_data
-            }
-        else:
-            # 🚨 初期リクエスト: HTMLから最初の継続トークンを抽出するロジックをシンプルに再構成
-            
-            # HTML内のすべての継続トークンから最初のものを見つける（動画リストの最初のバッチをロードするため）
-            token_match_fallback = re.search(r'"continuationEndpoint":\{"continuationCommand":\{"token":"([^"]+?)"\}', html_content)
-            
-            if token_match_fallback:
-                first_continuation = token_match_fallback.group(1)
-                # 初期リクエストも継続リクエストと同じペイロード構造で送る
-                payload = {
-                    "continuation": first_continuation,
-                    "context": context_data
-                }
-            else:
-                # 🚨 これがインデントエラーの原因だった可能性あり。
-                # 確実にリターン文をインデントブロック内に配置
-                return create_json_response({'error': '初期動画リストのロード用トークンが見つかりませんでした。'}, 500) 
-
-        headers_api = {
-            'Content-Type': 'application/json',
-            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
-        }
-        
-        # 4. 内部APIを叩く
-        api_response = requests.post(api_url, json=payload, headers=headers_api, timeout=10)
-        api_response.raise_for_status() 
-        api_data = api_response.json()
-    
-        # 5. APIデータから動画リストを抽出（ページネーション対応）
-        
-        # 継続リクエストも初期リクエストも、レスポンス構造は onResponseReceivedCommands の中にあります
-        continuation_items = api_data.get('onResponseReceivedCommands', [{}])[0].get('appendContinuationItemsAction', {}).get('continuationItems', [])
-        video_items_container = continuation_items
-        
-        videos = []
-        next_continuation = None
-
-        for item in video_items_container:
-            # 継続トークンを抽出
-            continuation_item = item.get('continuationItemRenderer')
-            if continuation_item:
-                next_continuation = continuation_item.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
-                continue
-                
-            # 動画レンダラー抽出
-            renderer = item.get('gridVideoRenderer') # チャンネルの動画リストは 'gridVideoRenderer' であることが多い
-            if not renderer: continue
-
-            # 動画情報の抽出
-            video_id = renderer.get('videoId')
-            title_obj = renderer.get('title', {})
-            final_title = title_obj.get('runs', [{}])[0].get('text', 'タイトル不明')
-            duration = renderer.get('thumbnailOverlay', {}).get('thumbnailOverlayTimeStatusRenderer', {}).get('text', {}).get('simpleText', '')
-            if duration:
-                 final_title = f"{final_title} ({duration})"
-            
-            # チャンネル情報は不要（既にチャンネルページのため）
-            channel_name = channel_id
-            channel_id_link = channel_id
-            
-            videos.append({
-                'video_id': video_id,
-                'title': final_title,
-                'thumbnail_url': renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'dummy'),
-                'channel_name': channel_name, 
-                'channel_id': channel_id_link,
-                'views': renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明'),
-                'published_at': renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明'),
-            })
-
-        # 戻り値に next_continuation を追加して返す
-        return create_json_response({'videos': videos, 'next_continuation': next_continuation}, 200)
+        return create_json_response(final_data, 200)
 
     except requests.exceptions.HTTPError as e:
-        error_message = f'APIコールが失敗しました: {e.response.status_code}'
-        return create_json_response({'error': error_message}, 503)
+        if e.response.status_code == 404:
+            return create_json_response({'error': f'チャンネルが見つかりません。ID/ハンドル({channel_id})を確認してください。'}, 404)
+        return create_json_response({'error': f'外部URLの取得に失敗しました: {e}'}, 503)
     except Exception as e:
-        return create_json_response({'error': f'動画リストの取得に失敗しました: {type(e).__name__}'}, 500)
+        print(f"Critical error during channel metadata fetching: {e}")
+        return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
 
 
 
