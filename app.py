@@ -1033,12 +1033,33 @@ def search_channels():
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route('/API/yt/video', methods=['GET'])
 def video_metadata():
-    """動画視聴ページからytInitialDataをスクレイピングし、メタデータを取得して返すAPI。"""
+    """動画視聴ページからytInitialDataをスクレイピングし、メタデータを取得して返すAPI。
+    
+    クエリパラメータ 'type=data' が付与されている場合、生のytInitialData (JSON) をそのまま返します。
+    """
     
     video_id = request.args.get('v')
-    print(f"video_id:{video_id}") # デバッグ出力
+    response_type = request.args.get('type')
+    
+    print(f"video_id:{video_id}, type:{response_type}")
     
     if not video_id:
         return create_json_response({'error': 'Video IDがありません。'}, 400)
@@ -1049,24 +1070,30 @@ def video_metadata():
     try:
         print(f"Fetching URL: {url}")
         response = requests.get(url, timeout=10)
-        response.raise_for_status() # 200以外の場合はHTTPErrorを発生させる
+        response.raise_for_status()
         
         html_content = response.text
         
         # 1. HTMLからytInitialData (JSON) を抽出
         match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
         if not match:
-            # ページは存在するがデータが見つからない場合
             return create_json_response({'error': 'Initial video data (ytInitialData)が見つかりませんでした。'}, 500)
         
         # 2. JSONをパース
         data = json.loads(match.group(1))
         
-        # 3. 複雑な構造から動画の主要情報部分を特定
+        # 3. 【type=data の場合は生のJSONデータをそのまま返す】
+        if response_type == 'data':
+            print("Response type is 'data'. Returning raw JSON data.")
+            return create_json_response(data, 200)
+
+        # 4. 通常のメタデータ抽出処理
+        
+        # 複雑な構造から動画の主要情報部分を特定
         contents = data.get('contents', {})
         watch_next_results = contents.get('twoColumnWatchNextResults', {}).get('results', {}).get('results', {}).get('contents', [])
         
-        # 4. メイン情報とサブ情報（チャンネルなど）のレンダラーを抽出
+        # メイン情報とサブ情報（チャンネルなど）のレンダラーを抽出
         primary_info = watch_next_results[0].get('videoPrimaryInfoRenderer') if len(watch_next_results) > 0 and 'videoPrimaryInfoRenderer' in watch_next_results[0] else None
         secondary_info = watch_next_results[1].get('videoSecondaryInfoRenderer') if len(watch_next_results) > 1 and 'videoSecondaryInfoRenderer' in watch_next_results[1] else None
         
@@ -1086,13 +1113,20 @@ def video_metadata():
         owner = secondary_info.get('owner', {}).get('videoOwnerRenderer', {})
         channel_name = owner.get('title', {}).get('runs', [{}])[0].get('text', 'チャンネル名不明')
         channel_id = owner.get('title', {}).get('runs', [{}])[0].get('navigationEndpoint', {}).get('browseEndpoint', {}).get('browseId', '')
-        comments = owner.get('comments', {}).get('runs', [{}])[0].get('text', '[{"author": "PlayerA", "text": "参考になりました！"}, {"author": "PlayerB", "text": "次も期待しています！"}]')
+        
+        # チャンネルアイコンURL
+        profile_img_url = 'https://dummyimage.com/80x80/000/fff&text=CM' # フォールバックURL
+        thumbnail_obj = owner.get('thumbnail', {})
+        thumbnails = thumbnail_obj.get('thumbnails', [])
+
+        if thumbnails:
+            profile_img_url = thumbnails[-1].get('url', profile_img_url)
         
         # 説明文
         description_runs = secondary_info.get('description', {}).get('runs', [])
         description = "".join([run.get('text', '') for run in description_runs])
         
-        # 最終結果をまとめる
+        # 6. 最終結果をまとめる
         final_data = {
             'video_id': video_id,
             'title': title,
@@ -1100,10 +1134,11 @@ def video_metadata():
             'published_at': published_at,
             'channel_name': channel_name,
             'channel_id': channel_id,
+            'profile_image_url': profile_img_url, 
             'description': description,
-            # 前のダミー関数が提供していたコメント情報を追加（ここでは固定値）
+            # 前のダミー関数が提供していたコメント情報を再現
             'comment_count': 125,
-            'comments': comments
+            'comments': [{'author': 'PlayerA', 'text': '参考になりました！'}, {'author': 'PlayerB', 'text': '次も期待しています！'}]
         }
         
         print(f"Successfully extracted metadata for video: {title}")
@@ -1112,10 +1147,22 @@ def video_metadata():
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             return create_json_response({'error': f'動画が見つかりません。ID({video_id})を確認してください。'}, 404)
+        # その他のHTTPエラー (例: 5xx, 403など)
         return create_json_response({'error': f'外部URLの取得に失敗しました: {e}'}, 503)
     except Exception as e:
+        # 予期せぬエラー（JSON解析エラー、キーエラーなど）
         print(f"Critical error during video metadata fetching: {e}")
         return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
+
+
+
+
+
+
+
+
+
+
 
 
 
