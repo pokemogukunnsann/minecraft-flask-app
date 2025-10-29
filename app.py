@@ -1355,143 +1355,264 @@ def channel_metadata():
 
 
 
-# 修正後の関数全体
+import requests
+from flask import request, jsonify, make_response
+# ... (他の import や create_json_response, extract_continuation_token の定義は省略) ...
+
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
-    """指定されたチャンネルIDまたはカスタムURLの動画リストを取得するAPI。
-    
-    クエリパラメータ 'c' は 'UC...' (チャンネルID) または '@ユーザー名' (カスタムURL) に対応します。
-    'type=data' が付与されている場合、生のytInitialData (JSON) をそのまま返します。
-    """
-    
-    channel_identifier = request.args.get('c')
-    response_type = request.args.get('type')
-    
-    print(f"channel_identifier:{channel_identifier}, type:{response_type}")
-    
-    if not channel_identifier:
-        return create_json_response({'error': 'Channel IDまたはカスタムURLがありません。'}, 400)
+    identifier = request.args.get('c')
+    data_type = request.args.get('type') # 💡 type=data パラメータを取得
 
-    # カスタムURL (@バンドル) またはチャンネルIDに応じてURLを決定
-    if channel_identifier.startswith('@'):
-        url = f"https://www.youtube.com/{channel_identifier}/videos"
-        print(f"Using Custom URL: {url}")
-    else:
-        url = f"https://www.youtube.com/channel/{channel_identifier}/videos"
-        print(f"Using Channel ID URL: {url}")
+    print(f"identifier:{identifier}")
+    print(f"data_type:{data_type}")
+    
+    if not identifier:
+        return create_json_response({'error': 'チャンネルIDまたはカスタムURL (c) がありません。'}, 400)
+
+    # 1. YouTube APIへのリクエストペイロード
+    url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
+    
+    payload = {
+        "context": {
+            "client": {
+                "clientName": "WEB",
+                "clientVersion": "2.20251027.01.00", 
+                "hl": "ja",
+                "gl": "JP"
+            }
+        },
+        "browseId": identifier
+    }
     
     try:
-        response = requests.get(url, timeout=10)
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
         response.raise_for_status()
         
-        html_content = response.text
+        data = response.json()
         
-        # 1. HTMLからytInitialData (JSON) を抽出
-        match = re.search(r'var ytInitialData = (.*?);</script>', html_content, re.DOTALL)
-        if not match:
-            return create_json_response({'error': 'Initial video data (ytInitialData)が見つかりませんでした。'}, 500)
+        # 💡 修正点: type=data のチェック
+        if data_type == 'data':
+            print("type=dataが指定されたため、生JSONをそのまま返します。")
+            return create_json_response(data, 200) # 👈 生データ (raw JSON) を返す
         
-        # 2. JSONをパース
-        data = json.loads(match.group(1))
+        # ********** type=dataがない場合の整形処理 **********
         
-        # type=data の場合は生のJSONデータをそのまま返す
-        if response_type == 'data':
-            print("Response type is 'data'. Returning raw JSON data.")
-            return create_json_response(data, 200)
-
-        # 3. 動画リストコンテナの検索
+        videos = []
         
-        tab_contents = data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
-
-        video_tab = None
-        for tab in tab_contents:
-            tab_renderer = tab.get('tabRenderer', {})
-            # URLが '/videos' で終わるタブを探す
-            if tab_renderer.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '').endswith('/videos'):
-                video_tab = tab_renderer
+        # 継続トークンの抽出 (ヘルパー関数を使用)
+        continuation_token = extract_continuation_token(data)
+        
+        # チャンネルページの動画タブ内のコンテンツのパスを探索 (長いため詳細は省略)
+        # ... (動画リストを抽出し、videosリストに格納するロジック) ...
+        contents_path = data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
+        
+        video_tab_content = None
+        for tab in contents_path:
+            tab_renderer = tab.get('tabRenderer')
+            if tab_renderer and tab_renderer.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '').endswith('/videos'):
+                video_tab_content = tab_renderer.get('content', {})
                 break
         
-        if not video_tab:
-            return create_json_response({'error': '動画リストを含むタブが見つかりませんでした。'}, 500)
-
-        videos_data = []
-        video_items = []
-        video_renderer_key = None
+        if video_tab_content:
+            section_list_renderer = video_tab_content.get('sectionListRenderer', {})
+            if section_list_renderer:
+                # 動画の抽出ロジック（前回の内容）
+                # ... (gridRendererから動画情報を抽出してvideosリストに追加) ...
+                for section in section_list_renderer.get('contents', []):
+                    if 'itemSectionRenderer' in section:
+                        item_section = section['itemSectionRenderer'].get('contents', [])
+                        for item in item_section:
+                            if 'gridRenderer' in item:
+                                for video_item in item['gridRenderer'].get('items', []):
+                                    video_renderer = video_item.get('gridVideoRenderer')
+                                    if video_renderer:
+                                        v_id = video_renderer.get('videoId')
+                                        title = "".join(r['text'] for r in video_renderer.get('title', {}).get('runs', [])) if video_renderer.get('title', {}).get('runs') else 'タイトル不明'
+                                        metadata = video_renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明')
+                                        views = video_renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
+                                        thumbnail_url = video_renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'N/A')
+                                        
+                                        videos.append({
+                                            'video_id': v_id,
+                                            'title': title,
+                                            'views': views,
+                                            'published_at': metadata,
+                                            'thumbnail_url': thumbnail_url
+                                        })
         
-        # 💡 【RichGridRenderer対応】: 新しい構造 (tabRenderer -> content -> richGridRenderer)
-        rich_grid_renderer = video_tab.get('content', {}).get('richGridRenderer')
+        response_data = {
+            'identifier': identifier,
+            'videos': videos,
+            'continuation_token': continuation_token # 継続トークンを含める
+        }
         
-        # 💡 【GridRenderer対応】: 従来の構造 (tabRenderer -> content -> sectionListRenderer -> ... -> gridRenderer)
-        grid_renderer = None
-        section_list = video_tab.get('content', {}).get('sectionListRenderer', {})
-        if section_list:
-            # 従来の複雑なパスをたどる
-            grid_renderer = section_list.get('contents', [{}])[0].get('itemSectionRenderer', {}).get('contents', [{}])[0].get('gridRenderer', {})
+        print(f"抽出された動画数: {len(videos)}。トークンあり: {bool(continuation_token)}")
+        return create_json_response(response_data, 200) # 👈 整形済みデータ (structured JSON) を返す
+
+    except requests.exceptions.HTTPError as e:
+        return create_json_response({'error': f'YouTube APIとの通信に失敗しました: {e}'}, 503)
+    except Exception as e:
+        print(f"Critical error during channel videos fetching: {e}")
+        return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
 
 
-        if rich_grid_renderer:
-            # richGridRenderer の場合は 'contents' を取得し、rendererは 'richItemRenderer' の中にある
-            video_items = rich_grid_renderer.get('contents', [])
-            video_renderer_key = 'richItemRenderer'
-            print("Using RichGridRenderer structure.")
+
+        
+
+
+
+
+
+
+
+
+
+
+# 💡 汎用的な継続APIの新規追加
+@app.route('/API/yt/continuation', methods=['GET'])
+def continuation_next():
+    """継続トークンを使用して次の動画リストを取得するAPI。"""
+    token = request.args.get('token')
+    
+    print(f"継続トークン:{token}")
+    
+    if not token:
+        return create_json_response({'error': '継続トークン (token) がありません。'}, 400)
+
+    # 1. 内部APIのURLとペイロードの定義 (continuationコマンドを実行)
+    url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
+    
+    payload = {
+        "context": {
+            "client": {
+                "clientName": "WEB",
+                "clientVersion": "2.20251027.01.00", 
+                "hl": "ja",
+                "gl": "JP"
+            }
+        },
+        "continuation": token
+    }
+    
+    try:
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # 2. ヘルパー関数で動画と次のトークンを抽出
+        videos, next_token = extract_continuation_results(data)
+
+        # 3. 最終的な応答を構築
+        response_data = {
+            'videos': videos,
+            'continuation_token': next_token
+        }
             
-        elif grid_renderer:
-            # gridRenderer の場合は 'items' を取得し、rendererは 'gridVideoRenderer'
-            video_items = grid_renderer.get('items', [])
-            video_renderer_key = 'gridVideoRenderer'
-            print("Using GridRenderer structure.")
-            
-        else:
-            return create_json_response({'error': '動画リストのレンダラー（RichGridRendererまたはGridRenderer）が見つかりませんでした。'}, 500)
+        print(f"ロードされた継続動画数: {len(videos)}。次のトークンあり: {bool(next_token)}")
+        return create_json_response(response_data, 200)
 
-        # 4. 動画アイテムの抽出ループ
-        for item in video_items:
-            video_renderer = None
-            
-            if video_renderer_key == 'richItemRenderer':
-                # richGridRenderer のパス: richItemRenderer -> content -> videoRenderer
-                rich_item = item.get('richItemRenderer')
-                if rich_item:
-                    video_renderer = rich_item.get('content', {}).get('videoRenderer')
-            
-            elif video_renderer_key == 'gridVideoRenderer':
-                # gridRenderer のパス: item -> gridVideoRenderer
-                video_renderer = item.get('gridVideoRenderer')
+    except requests.exceptions.HTTPError as e:
+        return create_json_response({'error': f'YouTube APIとの通信に失敗しました: {e}'}, 503)
+    except Exception as e:
+        print(f"Critical error during continuation fetching: {e}")
+        return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
+#=================================================
+#💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡
+#💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡
+#💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡
+#💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡💡
+#=================================================
+# 💡 新しいエンドポイント: 動画の関連動画を取得する
+@app.route('/API/yt/watch/related', methods=['GET'])
+def watch_related_videos():
+    """指定された動画IDに関連する動画リストを取得するAPI。
+    
+    クエリパラメータ 'v' に動画ID (e.g., B6ktM9FfDVE) を指定します。
+    """
+    video_id = request.args.get('v')
+    
+    print(f"video_id:{video_id}")
 
+    if not video_id:
+        return create_json_response({'error': '動画ID (v) がありません。'}, 400)
 
+    # 1. 内部APIのURLとペイロードの定義
+    url = "https://www.youtube.com/youtubei/v1/next?prettyPrint=false"
+    
+    # 💡 重要なペイロード構造
+    payload = {
+        "context": {
+            "client": {
+                # WEBクライアントの情報を設定 (最新のバージョンに近づける)
+                "clientName": "WEB",
+                "clientVersion": "2.20251027.01.00", 
+                "hl": "ja", # 言語
+                "gl": "JP"  # 地域
+            }
+        },
+        "videoId": video_id
+    }
+    
+    try:
+        # 2. POSTリクエストの実行
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # 3. 関連動画リストの抽出 (複雑なパスをたどる)
+        
+        # secondaryResultsRendererを探す
+        secondary_results_renderer = data.get('contents', {}) \
+                                         .get('twoColumnWatchNextResults', {}) \
+                                         .get('secondaryResults', {}) \
+                                         .get('secondaryResultsRenderer', {})
+
+        if not secondary_results_renderer:
+            return create_json_response({'error': '関連動画データが見つかりませんでした。'}, 500)
+            
+        # 関連動画のリストは contents に格納されている
+        contents = secondary_results_renderer.get('contents', [])
+        
+        related_videos = []
+        
+        for item in contents:
+            # compactVideoRenderer が関連動画の基本単位
+            video_renderer = item.get('compactVideoRenderer')
+            
             if video_renderer:
-                video_id = video_renderer.get('videoId')
                 
-                # タイトル、視聴回数、サムネイルの抽出ロジックは共通
-                title = video_renderer.get('title', {}).get('runs', [{}])[0].get('text', 'タイトル不明')
+                # 動画情報の抽出 (以前のチャンネル動画リストと同じキー)
+                v_id = video_renderer.get('videoId')
+                title = video_renderer.get('title', {}).get('simpleText', 'タイトル不明')
                 views = video_renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
                 
                 thumbnail_url = 'N/A'
                 thumbnails = video_renderer.get('thumbnail', {}).get('thumbnails', [])
                 if thumbnails:
+                    # 最高解像度のサムネイルを使用
                     thumbnail_url = thumbnails[-1].get('url')
 
-                videos_data.append({
-                    'video_id': video_id,
+                related_videos.append({
+                    'video_id': v_id,
                     'title': title,
                     'views': views,
                     'thumbnail_url': thumbnail_url
                 })
         
-        print(f"Successfully extracted {len(videos_data)} videos for identifier: {channel_identifier}")
-        return create_json_response({'identifier': channel_identifier, 'videos': videos_data}, 200)
+        print(f"Successfully extracted {len(related_videos)} related videos for ID: {video_id}")
+        return create_json_response({'video_id': video_id, 'related_videos': related_videos}, 200)
 
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            return create_json_response({'error': f'チャンネルが見つかりません。IDまたはカスタムURL ({channel_identifier}) を確認してください。'}, 404)
-        return create_json_response({'error': f'外部URLの取得に失敗しました: {e}'}, 503)
+        return create_json_response({'error': f'YouTube APIとの通信に失敗しました: {e}'}, 503)
     except Exception as e:
-        print(f"Critical error during channel videos fetching: {e}")
+        print(f"Critical error during related videos fetching: {e}")
         return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
-        
-
-
-
 
 
 
