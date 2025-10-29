@@ -1506,40 +1506,49 @@ def channel_videos():
         video_tab_content = None
         for tab in contents_path:
             tab_renderer = tab.get('tabRenderer')
-            # URLが /videos で終わるタブ（動画タブ）を見つける
             if tab_renderer and tab_renderer.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '').endswith('/videos'):
                 video_tab_content = tab_renderer.get('content', {})
                 break
         
         if video_tab_content:
             # 3.2. 継続トークンの抽出
-            # 💡 'extract_token_from_tab_content' は別途定義されている必要があります
             continuation_token = extract_token_from_tab_content(video_tab_content)
             
-            # 3.3. 動画リストの抽出
+            # 3.3. 動画リストの抽出ロジック (shelfRenderer対応)
             section_list_renderer = video_tab_content.get('sectionListRenderer', {})
             if section_list_renderer:
                 for section in section_list_renderer.get('contents', []):
                     if 'itemSectionRenderer' in section:
                         item_section = section['itemSectionRenderer'].get('contents', [])
                         for item in item_section:
+                            
+                            # コンテナの特定
+                            video_items = []
                             if 'gridRenderer' in item:
-                                for video_item in item['gridRenderer'].get('items', []):
-                                    video_renderer = video_item.get('gridVideoRenderer')
-                                    if video_renderer:
-                                        v_id = video_renderer.get('videoId')
-                                        title = "".join(r['text'] for r in video_renderer.get('title', {}).get('runs', [])) if video_renderer.get('title', {}).get('runs') else 'タイトル不明'
-                                        metadata = video_renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明')
-                                        views = video_renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
-                                        thumbnail_url = video_renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'N/A')
-                                        
-                                        videos.append({
-                                            'video_id': v_id,
-                                            'title': title,
-                                            'views': views,
-                                            'published_at': metadata,
-                                            'thumbnail_url': thumbnail_url
-                                        })
+                                video_items = item['gridRenderer'].get('items', [])
+                            elif 'shelfRenderer' in item and 'content' in item['shelfRenderer']:
+                                horizontal_list = item['shelfRenderer']['content'].get('horizontalListRenderer', {})
+                                video_items = horizontal_list.get('items', [])
+                            else:
+                                continue 
+                                
+                            # 動画情報の抽出
+                            for video_item in video_items:
+                                video_renderer = video_item.get('gridVideoRenderer')
+                                if video_renderer:
+                                    v_id = video_renderer.get('videoId')
+                                    title = "".join(r['text'] for r in video_renderer.get('title', {}).get('runs', [])) if video_renderer.get('title', {}).get('runs') else 'タイトル不明'
+                                    metadata = video_renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明')
+                                    views = video_renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
+                                    thumbnail_url = video_renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'N/A')
+                                    
+                                    videos.append({
+                                        'video_id': v_id,
+                                        'title': title,
+                                        'views': views,
+                                        'published_at': metadata,
+                                        'thumbnail_url': thumbnail_url
+                                    })
         
         # 4. 整形済みレスポンス
         response_data = {
