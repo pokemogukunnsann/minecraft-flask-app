@@ -58,6 +58,11 @@ CORS(app, supports_credentials=True, origins=[
 ])
 
 # --- その他定数 ---
+INVIDIOUS_INSTANCES = [r"https://inv.perditum.com"
+                    #, r"https://yewtu.be",r"https://invidious.f5.si",r"https://invidious.nerdvpn.de",r"https://inv.nadeko.net"
+                       # 上のハッシュ(#️⃣)を消したらリンクが増えます。
+                      ]
+print(f"今回は、{INVIDIOUS_INSTANCES}このリンクを使用します。")
 CONFIG_URL = 'https://raw.githubusercontent.com/siawaseok3/wakame/master/video_config.json'
 DEFAULT_EMBED_BASE = 'https://www.youtubeeducation.com/embed/'
 PLAYERS_DIR_PATH = 'players'
