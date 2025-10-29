@@ -1561,111 +1561,56 @@ def channel_next_video_invidious_robust():
 
 
 @app.route('/API/yt/channel/videos', methods=['GET'])
-def channel_videos():
+def channel_videos_invidious_robust():
     identifier = request.args.get('c')
-    data_type = request.args.get('type')
-
     print(f"identifier:{identifier}")
+    data_type = request.args.get('type')
     print(f"data_type:{data_type}")
     
     if not identifier:
-        return create_json_response({'error': 'チャンネルIDまたはカスタムURL (c) がありません。'}, 400)
+        return create_json_response({'error': 'チャンネルID (c) がありません。'}, 400)
 
-    # 1. YouTube API リクエスト設定
-    url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
-    
-    payload = {
-        "context": {
-            "client": {
-                "clientName": "WEB",
-                "clientVersion": "2.20251027.01.00", 
-                "hl": "ja",
-                "gl": "JP"
-            }
-        },
-        "browseId": identifier
-    }
-    
     try:
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
+        # Invidious API: /api/v1/channels/{id}
+        endpoint = f"/api/v1/channels/{urllib.parse.quote(identifier)}"
+        data = invidious_api_request_robust(endpoint)
         
-        data = response.json()
-        
-        # 2. type=data のチェック (生データ)
+        # 生データを返すオプション
         if data_type == 'data':
             print("type=dataが指定されたため、生JSONをそのまま返します。")
             return create_json_response(data, 200)
 
-        # 3. 整形処理 (動画リストと継続トークンの抽出)
+        # 動画リストを整形
         videos = []
-        continuation_token = None
-        
-        # 3.1. 動画タブコンテンツの特定
-        contents_path = data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
-        
-        video_tab_content = None
-        for tab in contents_path:
-            tab_renderer = tab.get('tabRenderer')
-            if tab_renderer and tab_renderer.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '').endswith('/videos'):
-                video_tab_content = tab_renderer.get('content', {})
-                break
-        
-        if video_tab_content:
-            # 3.2. 継続トークンの抽出
-            continuation_token = extract_token_from_tab_content(video_tab_content)
-            
-            # 3.3. 動画リストの抽出ロジック (shelfRenderer対応)
-            section_list_renderer = video_tab_content.get('sectionListRenderer', {})
-            if section_list_renderer:
-                for section in section_list_renderer.get('contents', []):
-                    if 'itemSectionRenderer' in section:
-                        item_section = section['itemSectionRenderer'].get('contents', [])
-                        for item in item_section:
-                            
-                            # コンテナの特定
-                            video_items = []
-                            if 'gridRenderer' in item:
-                                video_items = item['gridRenderer'].get('items', [])
-                            elif 'shelfRenderer' in item and 'content' in item['shelfRenderer']:
-                                horizontal_list = item['shelfRenderer']['content'].get('horizontalListRenderer', {})
-                                video_items = horizontal_list.get('items', [])
-                            else:
-                                continue 
-                                
-                            # 動画情報の抽出
-                            for video_item in video_items:
-                                video_renderer = video_item.get('gridVideoRenderer')
-                                if video_renderer:
-                                    v_id = video_renderer.get('videoId')
-                                    title = "".join(r['text'] for r in video_renderer.get('title', {}).get('runs', [])) if video_renderer.get('title', {}).get('runs') else 'タイトル不明'
-                                    metadata = video_renderer.get('publishedTimeText', {}).get('simpleText', '公開日不明')
-                                    views = video_renderer.get('viewCountText', {}).get('simpleText', '視聴回数不明')
-                                    thumbnail_url = video_renderer.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', 'N/A')
-                                    
-                                    videos.append({
-                                        'video_id': v_id,
-                                        'title': title,
-                                        'views': views,
-                                        'published_at': metadata,
-                                        'thumbnail_url': thumbnail_url
-                                    })
-        
-        # 4. 整形済みレスポンス
+        if data.get("latestVideos"):
+            for video in data["latestVideos"]:
+                video_data = {
+                    'video_id': video["videoId"],
+                    'title': video["title"],
+                    # 'views'がない場合は "N/A" を設定
+                    'views': video.get("viewCount", "N/A"),
+                    'published_at': video["publishedText"],
+                    # 最後のサムネイル（最大解像度）を取得
+                    'thumbnail_url': video["videoThumbnails"][-1]["url"] if video.get("videoThumbnails") else 'N/A'
+                }
+                videos.append(video_data)
+                print(f"video_data:{video_data}") # Pythonコード生成時のルールに従い出力
+
         response_data = {
             'identifier': identifier,
+            'channel_name': data.get("author"),
             'videos': videos,
-            'continuation_token': continuation_token
+            'continuation_token': None # Invidious APIの/channelsルートは継続トークンを返さない
         }
+        print(f"response_data:{response_data}") # Pythonコード生成時のルールに従い出力
         
-        print(f"抽出された動画数: {len(videos)}。トークンあり: {bool(continuation_token)}")
+        print(f"抽出された動画数: {len(videos)}")
         return create_json_response(response_data, 200)
 
-    except requests.exceptions.HTTPError as e:
-        return create_json_response({'error': f'YouTube APIとの通信に失敗しました: {e}'}, 503)
+    except APIRequestFailed as e:
+        return create_json_response({'error': str(e)}, 503)
     except Exception as e:
-        print(f"Critical error during channel videos fetching: {e}")
+        print(f"Critical error: {e}", file=sys.stderr)
         return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
 
 
