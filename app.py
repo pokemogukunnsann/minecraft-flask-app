@@ -1791,6 +1791,38 @@ def watch_related_videos():
 
 
 
+@app.route('/API/yt/video/data', methods=['GET'])
+def video_data_invidious_robust():
+    video_id = request.args.get('v')
+    
+    if not video_id:
+        return create_json_response({'error': '動画ID (v) がありません。'}, 400)
+
+    try:
+        # Invidious API: /api/v1/videos/{id}
+        endpoint = f"/api/v1/videos/{urllib.parse.quote(video_id)}"
+        data = invidious_api_request_robust(endpoint)
+        
+        # 必要な情報を抽出・整形
+        response_data = {
+            'video_id': data.get("videoId"),
+            'title': data.get("title"),
+            'description': data.get("description"),
+            'author': data.get("author"),
+            'author_id': data.get("authorId"),
+            'view_count': data.get("viewCount"),
+            'upload_date': data.get("publishedText"),
+            # (必要に応じて、さらに他のフィールドも追加可能)
+        }
+        
+        return create_json_response(response_data, 200)
+
+    except APIRequestFailed as e:
+        return create_json_response({'error': str(e)}, 503)
+    except Exception as e:
+        return create_json_response({'error': f'サーバー側で予期せぬエラーが発生しました: {type(e).__name__}'}, 500)
+
+
 
 
 
