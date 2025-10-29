@@ -8,6 +8,7 @@ import re
 import uuid
 import requests
 import base64
+import urllib.parse
 from urllib.parse import urlparse, parse_qs, urlencode
 from dotenv import load_dotenv
 import random
