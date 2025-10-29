@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 from flask_cors import CORS
+import sys
 
 # .envファイルをロード
 load_dotenv()
@@ -100,6 +101,47 @@ DUMMY_CHANNEL = {
 # ------------------------------------------------
 # 1. ヘルパー関数 (ユーティリティ / GitHub API)
 # ------------------------------------------------
+class APIRequestFailed(Exception):
+    """すべての Invidious インスタンスへのリクエストが失敗したことを示すカスタム例外"""
+    pass
+
+def create_json_response(data, status_code):
+    """レスポンスをJSON形式で作成するヘルパー関数"""
+    print(f"info: Responding with status {status_code}")
+    response = make_response(jsonify(data), status_code)
+    response.headers['Content-Type'] = 'application/json'
+    return response
+
+def invidious_api_request_robust(endpoint):
+    """
+    複数の Invidious インスタンスを順番に試し、最初に応答が成功したインスタンスの JSON を返す。
+    """
+    for base_url in INVIDIOUS_INSTANCES:
+        url = base_url.rstrip('/') + endpoint
+        try:
+            print(f"info: Trying instance: {url}")
+            response = requests.get(url, timeout=7) 
+            response.raise_for_status()
+            
+            content_type = response.headers.get('Content-Type', '')
+            if 'application/json' in content_type:
+                return response.json()
+            else:
+                print(f"info: Instance {base_url} returned non-JSON content ({content_type}). Trying next.")
+                continue
+
+        except requests.exceptions.RequestException as e:
+            print(f"info: Instance {base_url} failed with error: {type(e).__name__}. Trying next.")
+            continue
+    
+    raise APIRequestFailed("すべての Invidious インスタンスへのリクエストが失敗しました。")
+
+
+
+
+
+
+
 def get_dynamic_client_version():
     """現在の日付に基づいた YouTube クライアントバージョンを生成する"""
     # 現在時刻を取得
