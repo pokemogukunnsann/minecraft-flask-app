@@ -250,22 +250,20 @@ def create_json_response(data, status_code):
     response.headers['Content-Type'] = 'application/json'
     return response
 
-def extract_continuation_token(data):
-    """YouTube APIの初回応答から継続トークンを抽出するヘルパー関数"""
-    # ユーザーが指摘したパスをたどるための探索ロジック
+# 💡 継続トークン抽出ヘルパー関数の修正・統合
+def extract_token_from_tab_content(tab_content):
+    """
+    動画タブのコンテンツデータから継続トークンを抽出します。
+    （タブのインデックスに依存しないロジック）
+    """
     try:
-        # data -> contents -> twoColumnBrowseResultsRenderer -> tabs[1] -> tabRenderer -> content -> sectionListRenderer -> contents
-        section_contents = data.get('contents', {}) \
-                             .get('twoColumnBrowseResultsRenderer', {}) \
-                             .get('tabs', [])[1] \
-                             .get('tabRenderer', {}) \
-                             .get('content', {}) \
-                             .get('sectionListRenderer', {}) \
-                             .get('contents', [])
+        # 動画タブのコンテンツから sectionListRenderer -> contents を取得
+        section_contents = tab_content.get('sectionListRenderer', {}).get('contents', [])
 
         if not section_contents:
             return None
 
+        # 最後の要素 (continuationItemRenderer があると期待される場所)
         last_item = section_contents[-1]
         
         # itemSectionRenderer の中にある continuationItemRenderer を探す
@@ -282,11 +280,16 @@ def extract_continuation_token(data):
             print(f"抽出された継続トークン: {token}")
             return token
 
-    except (IndexError, AttributeError, KeyError, TypeError):
-        print("初期継続トークンの抽出に失敗しました。")
+    except (AttributeError, KeyError, TypeError):
+        print("継続トークンの抽出に失敗しました。（パスエラー）")
         return None
         
     return None
+
+# extract_continuation_results や create_json_response はそのまま利用
+
+
+
 
 def extract_continuation_results(data):
     """継続トークンリクエスト後のレスポンスから動画と次の継続トークンを抽出するヘルパー関数"""
@@ -1455,14 +1458,10 @@ def channel_metadata():
 
 
 
-import requests
-from flask import request, jsonify, make_response
-# ... (他の import や create_json_response, extract_continuation_token の定義は省略) ...
-
 @app.route('/API/yt/channel/videos', methods=['GET'])
 def channel_videos():
     identifier = request.args.get('c')
-    data_type = request.args.get('type') # 💡 type=data パラメータを取得
+    data_type = request.args.get('type')
 
     print(f"identifier:{identifier}")
     print(f"data_type:{data_type}")
@@ -1470,7 +1469,7 @@ def channel_videos():
     if not identifier:
         return create_json_response({'error': 'チャンネルIDまたはカスタムURL (c) がありません。'}, 400)
 
-    # 1. YouTube APIへのリクエストペイロード
+    # 1. YouTube API リクエスト設定
     url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
     
     payload = {
@@ -1492,34 +1491,34 @@ def channel_videos():
         
         data = response.json()
         
-        # 💡 修正点: type=data のチェック
+        # 2. type=data のチェック (生データ)
         if data_type == 'data':
             print("type=dataが指定されたため、生JSONをそのまま返します。")
-            return create_json_response(data, 200) # 👈 生データ (raw JSON) を返す
-        
-        # ********** type=dataがない場合の整形処理 **********
-        
+            return create_json_response(data, 200)
+
+        # 3. 整形処理 (動画リストと継続トークンの抽出)
         videos = []
+        continuation_token = None
         
-        # 継続トークンの抽出 (ヘルパー関数を使用)
-        continuation_token = extract_continuation_token(data)
-        
-        # チャンネルページの動画タブ内のコンテンツのパスを探索 (長いため詳細は省略)
-        # ... (動画リストを抽出し、videosリストに格納するロジック) ...
+        # 3.1. 動画タブコンテンツの特定
         contents_path = data.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
         
         video_tab_content = None
         for tab in contents_path:
             tab_renderer = tab.get('tabRenderer')
+            # URLが /videos で終わるタブ（動画タブ）を見つける
             if tab_renderer and tab_renderer.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '').endswith('/videos'):
                 video_tab_content = tab_renderer.get('content', {})
                 break
         
         if video_tab_content:
+            # 3.2. 継続トークンの抽出
+            # 💡 'extract_token_from_tab_content' は別途定義されている必要があります
+            continuation_token = extract_token_from_tab_content(video_tab_content)
+            
+            # 3.3. 動画リストの抽出
             section_list_renderer = video_tab_content.get('sectionListRenderer', {})
             if section_list_renderer:
-                # 動画の抽出ロジック（前回の内容）
-                # ... (gridRendererから動画情報を抽出してvideosリストに追加) ...
                 for section in section_list_renderer.get('contents', []):
                     if 'itemSectionRenderer' in section:
                         item_section = section['itemSectionRenderer'].get('contents', [])
@@ -1542,14 +1541,15 @@ def channel_videos():
                                             'thumbnail_url': thumbnail_url
                                         })
         
+        # 4. 整形済みレスポンス
         response_data = {
             'identifier': identifier,
             'videos': videos,
-            'continuation_token': continuation_token # 継続トークンを含める
+            'continuation_token': continuation_token
         }
         
         print(f"抽出された動画数: {len(videos)}。トークンあり: {bool(continuation_token)}")
-        return create_json_response(response_data, 200) # 👈 整形済みデータ (structured JSON) を返す
+        return create_json_response(response_data, 200)
 
     except requests.exceptions.HTTPError as e:
         return create_json_response({'error': f'YouTube APIとの通信に失敗しました: {e}'}, 503)
