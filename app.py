@@ -244,7 +244,7 @@ def save_single_player_data(player_data):
 
 # ... (他のヘルパー関数: upload_directory_to_github, parse_mc_pack, load_pack_registry, save_pack_registry, load_world_data, save_world_data, capture_game_output, get_manifest_from_github は全てこのブロックに定義済みと仮定) ...
 
-create_json_response(data, status_code):
+def create_json_response(data, status_code):
     """JSONレスポンスを生成し、ヘッダーを設定するヘルパー関数"""
     response = make_response(jsonify(data), status_code)
     response.headers['Content-Type'] = 'application/json'
